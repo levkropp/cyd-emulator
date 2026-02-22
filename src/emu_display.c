@@ -85,6 +85,20 @@ void display_draw_bitmap1bpp(int x, int y, int w, int h,
     pthread_mutex_unlock(&emu_framebuf_mutex);
 }
 
+void display_draw_rgb565_line(int x, int y, int w, const uint16_t *pixels)
+{
+    if (y < 0 || y >= DISPLAY_HEIGHT || w <= 0) return;
+    int skip = 0;
+    if (x < 0) { skip = -x; w += x; x = 0; }
+    if (x + w > DISPLAY_WIDTH) w = DISPLAY_WIDTH - x;
+    if (w <= 0) return;
+
+    pthread_mutex_lock(&emu_framebuf_mutex);
+    memcpy(&emu_framebuf[y * DISPLAY_WIDTH + x], pixels + skip,
+           w * sizeof(uint16_t));
+    pthread_mutex_unlock(&emu_framebuf_mutex);
+}
+
 void display_string(int x, int y, const char *s, uint16_t fg, uint16_t bg)
 {
     int cx = x, cy = y;
