@@ -13,6 +13,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdarg.h>
+#include <signal.h>
 #include <pthread.h>
 #include <time.h>
 
@@ -242,8 +243,19 @@ static void usage(const char *prog)
         prog);
 }
 
+/* Signal handler for clean shutdown on SIGTERM/SIGINT */
+static void signal_handler(int sig)
+{
+    (void)sig;
+    emu_app_running = 0;
+}
+
 int main(int argc, char *argv[])
 {
+    /* Handle SIGTERM/SIGINT for clean shutdown (e.g. from timeout, Ctrl+C) */
+    signal(SIGTERM, signal_handler);
+    signal(SIGINT, signal_handler);
+
     emu_sdcard_path = "sd.img";
     emu_active_board = &board_profiles[BOARD_DEFAULT_INDEX];
 
