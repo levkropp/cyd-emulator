@@ -17,6 +17,7 @@
 #include <signal.h>
 #include <pthread.h>
 #include <time.h>
+#include <sys/stat.h>
 
 #include <SDL2/SDL.h>
 
@@ -135,7 +136,7 @@ static const struct { const char *label; int x, w; } menu_hdrs[] = {
 #define DROP_W        (DROP_CHARS * FONT_WIDTH)   /* 192px */
 #define DROP_ITEM_H   FONT_HEIGHT                 /* 16px per item */
 
-#define FILE_ITEMS    5
+#define FILE_ITEMS    6
 #define VIEW_ITEMS    5
 #define HELP_ITEMS    2
 
@@ -346,7 +347,7 @@ static int dropdown_item_count(void)
 
 static int dropdown_is_separator(int item)
 {
-    return (menu_open == MENU_FILE && item == 3);
+    return (menu_open == MENU_FILE && item == 4);
 }
 
 static void dropdown_item_label(int item, char *buf, int bufsize)
@@ -356,10 +357,11 @@ static void dropdown_item_label(int item, char *buf, int bufsize)
     case MENU_FILE:
         switch (item) {
         case 0: snprintf(buf, bufsize, " Load Payload..."); break;
-        case 1: snprintf(buf, bufsize, " Save State..."); break;
-        case 2: snprintf(buf, bufsize, " Load State..."); break;
-        case 3: break; /* separator */
-        case 4: snprintf(buf, bufsize, " Quit             Q"); break;
+        case 1: snprintf(buf, bufsize, " Attach SD Image..."); break;
+        case 2: snprintf(buf, bufsize, " Save State..."); break;
+        case 3: snprintf(buf, bufsize, " Load State..."); break;
+        case 4: break; /* separator */
+        case 5: snprintf(buf, bufsize, " Quit             Q"); break;
         }
         break;
     case MENU_VIEW:
@@ -753,6 +755,31 @@ static void do_load_state(void)
     start_app_thread();
 }
 
+static void do_attach_sd(void)
+{
+    char *path = zenity_open("Attach SD Card Image", "Disk images | *.img");
+    if (!path) return;
+
+    struct stat st;
+    if (stat(path, &st) != 0) {
+        printf("Cannot stat %s\n", path);
+        free(path);
+        return;
+    }
+
+    stop_app_thread();
+    sdcard_deinit();
+
+    emu_sdcard_size_bytes = (uint64_t)st.st_size;
+    strncpy(sdcard_path_buf, path, sizeof(sdcard_path_buf) - 1);
+    sdcard_path_buf[sizeof(sdcard_path_buf) - 1] = '\0';
+    emu_sdcard_path = sdcard_path_buf;
+    free(path);
+
+    sdcard_init();
+    start_app_thread();
+}
+
 static void do_load_payload(void)
 {
     char *path = zenity_open("Load Payload", "Payload files | *.bin");
@@ -789,9 +816,10 @@ static void dropdown_execute(int item)
     case MENU_FILE:
         switch (item) {
         case 0: do_load_payload(); break;
-        case 1: do_save_state(); break;
-        case 2: do_load_state(); break;
-        case 4: emu_window_running = 0; emu_app_running = 0; break;  /* Quit */
+        case 1: do_attach_sd(); break;
+        case 2: do_save_state(); break;
+        case 3: do_load_state(); break;
+        case 5: emu_window_running = 0; emu_app_running = 0; break;  /* Quit */
         }
         break;
     case MENU_VIEW:

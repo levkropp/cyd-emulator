@@ -34,9 +34,16 @@ set(APP_SOURCES
     ${APP_SOURCE_DIR}/main.c
     ${APP_SOURCE_DIR}/gpt.c
     ${APP_SOURCE_DIR}/fat32.c
+    ${APP_SOURCE_DIR}/exfat.c
     ${APP_SOURCE_DIR}/flasher.c
     ${APP_SOURCE_DIR}/ui.c
     ${APP_SOURCE_DIR}/font.c
+    ${APP_SOURCE_DIR}/settings.c
+    ${APP_SOURCE_DIR}/app.c
+    ${APP_SOURCE_DIR}/apps.c
+    ${APP_SOURCE_DIR}/app_flasher.c
+    ${APP_SOURCE_DIR}/app_settings.c
+    ${APP_SOURCE_DIR}/app_files.c
 )
 
 add_executable(cyd-emulator ${EMU_SOURCES} ${APP_SOURCES})

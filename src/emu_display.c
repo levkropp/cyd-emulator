@@ -64,6 +64,27 @@ void display_char(int x, int y, char c, uint16_t fg, uint16_t bg)
     pthread_mutex_unlock(&emu_framebuf_mutex);
 }
 
+void display_draw_bitmap1bpp(int x, int y, int w, int h,
+                              const uint8_t *bitmap, uint16_t fg, uint16_t bg)
+{
+    int row_bytes = (w + 7) / 8;
+
+    pthread_mutex_lock(&emu_framebuf_mutex);
+    for (int row = 0; row < h; row++) {
+        int dy = y + row;
+        if (dy < 0 || dy >= DISPLAY_HEIGHT) continue;
+
+        const uint8_t *src = bitmap + row * row_bytes;
+        for (int col = 0; col < w; col++) {
+            int dx = x + col;
+            if (dx < 0 || dx >= DISPLAY_WIDTH) continue;
+            int bit = src[col / 8] & (0x80 >> (col & 7));
+            emu_framebuf[dy * DISPLAY_WIDTH + dx] = bit ? fg : bg;
+        }
+    }
+    pthread_mutex_unlock(&emu_framebuf_mutex);
+}
+
 void display_string(int x, int y, const char *s, uint16_t fg, uint16_t bg)
 {
     int cx = x, cy = y;
