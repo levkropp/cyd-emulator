@@ -44,6 +44,8 @@ set(APP_SOURCES
     ${APP_SOURCE_DIR}/app_flasher.c
     ${APP_SOURCE_DIR}/app_settings.c
     ${APP_SOURCE_DIR}/app_files.c
+    ${CMAKE_SOURCE_DIR}/../survival/sped/sped.c
+    ${CMAKE_SOURCE_DIR}/../survival/femtojpeg/femtojpeg.c
 )
 
 add_executable(cyd-emulator ${EMU_SOURCES} ${APP_SOURCES})
@@ -52,6 +54,8 @@ add_executable(cyd-emulator ${EMU_SOURCES} ${APP_SOURCES})
 target_include_directories(cyd-emulator PRIVATE
     ${CMAKE_SOURCE_DIR}/include      # ESP-IDF shim headers
     ${APP_SOURCE_DIR}                # App headers (display.h, etc.)
+    ${CMAKE_SOURCE_DIR}/../survival/sped
+    ${CMAKE_SOURCE_DIR}/../survival/femtojpeg
     ${SDL2_INCLUDE_DIRS}
 )
 
