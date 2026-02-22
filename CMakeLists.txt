@@ -26,6 +26,7 @@ set(EMU_SOURCES
     src/emu_sdcard.c
     src/emu_payload.c
     src/emu_crc32.c
+    src/emu_json.c
 )
 
 # App sources (reused verbatim from ESP32 firmware)
