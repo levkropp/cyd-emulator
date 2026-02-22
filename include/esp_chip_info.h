@@ -1,5 +1,5 @@
 /*
- * esp_chip_info.h — Chip info stub for native emulator
+ * esp_chip_info.h — Chip info stub, reads from active board profile
  */
 #ifndef ESP_CHIP_INFO_H
 #define ESP_CHIP_INFO_H
@@ -22,11 +22,15 @@ typedef struct {
     uint8_t  cores;
 } esp_chip_info_t;
 
+/* Provided by emu_main.c — set from board profile before app starts */
+extern int emu_chip_model;
+extern int emu_chip_cores;
+
 static inline void esp_chip_info(esp_chip_info_t *info) {
-    info->model = CHIP_ESP32;
+    info->model = (esp_chip_model_t)emu_chip_model;
     info->features = 0;
     info->revision = 0;
-    info->cores = 2;
+    info->cores = (uint8_t)emu_chip_cores;
 }
 
 #endif /* ESP_CHIP_INFO_H */

@@ -2,7 +2,7 @@
  * emu_sdcard.c — File-backed sector I/O (implements sdcard.h)
  *
  * Uses a raw disk image file. Sectors are 512 bytes.
- * The file is created/extended via ftruncate on init.
+ * Respects board profile sd_slots: if 0, sdcard_init() fails.
  */
 
 #include "sdcard.h"
@@ -20,9 +20,15 @@ static uint64_t sd_size = 0;
 /* Set by emu_main before sdcard_init is called */
 const char *emu_sdcard_path = NULL;
 uint64_t emu_sdcard_size_bytes = 4ULL * 1024 * 1024 * 1024; /* default 4GB */
+int emu_sdcard_enabled = 1;  /* set from board profile sd_slots */
 
 int sdcard_init(void)
 {
+    if (!emu_sdcard_enabled) {
+        ESP_LOGE(TAG, "No SD card slot on this board");
+        return -1;
+    }
+
     if (!emu_sdcard_path) {
         ESP_LOGE(TAG, "No SD card image path set (use --sdcard)");
         return -1;
