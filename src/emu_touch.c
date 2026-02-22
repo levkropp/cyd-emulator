@@ -79,6 +79,7 @@ bool touch_read(int *x, int *y)
         down = 1;
         *x = pending_x;
         *y = pending_y;
+        pending_down = 0;  /* consume the latch */
     } else {
         *x = mouse_x;
         *y = mouse_y;
