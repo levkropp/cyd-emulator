@@ -1,5 +1,7 @@
 # cyd-emulator
 
+![screenshot](screenshot.png)
+
 Desktop emulator for ESP32 CYD (Cheap Yellow Display) firmware. Runs your ESP32 app code natively on Linux using SDL2, with an emulated 320x240 ILI9341 display, resistive touchscreen, and SD card.
 
 ## What it does
@@ -11,19 +13,6 @@ Desktop emulator for ESP32 CYD (Cheap Yellow Display) firmware. Runs your ESP32 
 - Provides ESP-IDF shim headers so `#include "esp_log.h"` etc. just work
 - Info panel shows chip model, display resolution, touch events, and SD card status
 - Supports multiple CYD board profiles (`--board 2432S028R`, `--board 8048S070`, etc.)
-
-## Screenshot
-
-```
-+--[ CYD Emulator ]--+----------+
-| File  View  Help   |          |
-+--------------------+  Info    |
-|                    |  Panel   |
-|   320 x 240       |          |
-|   Emulated LCD     |          |
-|                    |          |
-+--------------------+----------+
-```
 
 ## Building
 
