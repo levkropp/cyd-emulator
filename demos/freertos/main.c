@@ -21,6 +21,11 @@
 #include "freertos/queue.h"
 #include "freertos/event_groups.h"
 #include "freertos/timers.h"
+#include "esp_timer.h"
+#include "nvs_flash.h"
+#include "nvs.h"
+#include "esp_system.h"
+#include "esp_random.h"
 
 static const char *TAG = "test";
 
@@ -659,6 +664,239 @@ static int test_queue_reset(void)
     return 1;
 }
 
+/* ---- Test 19: esp_timer one-shot ---- */
+
+static volatile int esp_timer_oneshot_fired = 0;
+
+static void esp_timer_oneshot_cb(void *arg)
+{
+    (void)arg;
+    esp_timer_oneshot_fired = 1;
+}
+
+static int test_esp_timer_oneshot(void)
+{
+    esp_timer_oneshot_fired = 0;
+    esp_timer_handle_t t;
+    esp_timer_create_args_t args = {
+        .callback = esp_timer_oneshot_cb,
+        .name = "test_once",
+    };
+    if (esp_timer_create(&args, &t) != ESP_OK) return 0;
+    if (esp_timer_start_once(t, 50000) != ESP_OK) { esp_timer_delete(t); return 0; }
+
+    vTaskDelay(200);
+    int result = esp_timer_oneshot_fired;
+
+    esp_timer_delete(t);
+    return result;
+}
+
+/* ---- Test 20: esp_timer periodic ---- */
+
+static volatile int esp_timer_periodic_count = 0;
+
+static void esp_timer_periodic_cb(void *arg)
+{
+    (void)arg;
+    esp_timer_periodic_count++;
+}
+
+static int test_esp_timer_periodic(void)
+{
+    esp_timer_periodic_count = 0;
+    esp_timer_handle_t t;
+    esp_timer_create_args_t args = {
+        .callback = esp_timer_periodic_cb,
+        .name = "test_periodic",
+    };
+    if (esp_timer_create(&args, &t) != ESP_OK) return 0;
+    if (esp_timer_start_periodic(t, 50000) != ESP_OK) { esp_timer_delete(t); return 0; }
+
+    vTaskDelay(280);
+    esp_timer_stop(t);
+
+    /* Expect 4-7 fires (50ms period over 280ms) */
+    int result = (esp_timer_periodic_count >= 4 && esp_timer_periodic_count <= 7);
+    if (!result)
+        ESP_LOGI(TAG, "esp_timer periodic count=%d, expected 4-7",
+                 esp_timer_periodic_count);
+
+    esp_timer_delete(t);
+    return result;
+}
+
+/* ---- Test 21: esp_timer_get_time ---- */
+
+static int test_esp_timer_get_time(void)
+{
+    int64_t t1 = esp_timer_get_time();
+    vTaskDelay(100);
+    int64_t t2 = esp_timer_get_time();
+
+    int64_t elapsed_us = t2 - t1;
+    /* Should be ~100000 us.  Allow 80000-200000. */
+    int result = (elapsed_us >= 80000 && elapsed_us <= 200000);
+    if (!result)
+        ESP_LOGI(TAG, "esp_timer elapsed=%lld us, expected ~100000",
+                 (long long)elapsed_us);
+    return result;
+}
+
+/* ---- Test 22: NVS set/get integers ---- */
+
+static int test_nvs_integers(void)
+{
+    nvs_handle_t h;
+    if (nvs_open("test_int", NVS_READWRITE, &h) != ESP_OK) return 0;
+
+    /* Erase any previous test data */
+    nvs_erase_all(h);
+
+    nvs_set_i32(h, "val_i32", -12345);
+    nvs_set_u32(h, "val_u32", 99999);
+    nvs_set_u8(h, "val_u8", 42);
+    nvs_commit(h);
+
+    int32_t i32_out;
+    uint32_t u32_out;
+    uint8_t u8_out;
+
+    if (nvs_get_i32(h, "val_i32", &i32_out) != ESP_OK || i32_out != -12345) {
+        nvs_close(h); return 0;
+    }
+    if (nvs_get_u32(h, "val_u32", &u32_out) != ESP_OK || u32_out != 99999) {
+        nvs_close(h); return 0;
+    }
+    if (nvs_get_u8(h, "val_u8", &u8_out) != ESP_OK || u8_out != 42) {
+        nvs_close(h); return 0;
+    }
+
+    /* Non-existent key should return NOT_FOUND */
+    int32_t dummy;
+    if (nvs_get_i32(h, "nope", &dummy) != ESP_ERR_NVS_NOT_FOUND) {
+        nvs_close(h); return 0;
+    }
+
+    nvs_close(h);
+    return 1;
+}
+
+/* ---- Test 23: NVS set/get string ---- */
+
+static int test_nvs_string(void)
+{
+    nvs_handle_t h;
+    if (nvs_open("test_str", NVS_READWRITE, &h) != ESP_OK) return 0;
+
+    nvs_erase_all(h);
+    nvs_set_str(h, "greeting", "Hello CYD!");
+    nvs_commit(h);
+
+    /* Query length first (out_value=NULL) */
+    size_t len = 0;
+    if (nvs_get_str(h, "greeting", NULL, &len) != ESP_OK || len == 0) {
+        nvs_close(h); return 0;
+    }
+
+    char buf[64];
+    len = sizeof(buf);
+    if (nvs_get_str(h, "greeting", buf, &len) != ESP_OK) {
+        nvs_close(h); return 0;
+    }
+
+    int result = (strcmp(buf, "Hello CYD!") == 0);
+    nvs_close(h);
+    return result;
+}
+
+/* ---- Test 24: NVS persistence (close and reopen) ---- */
+
+static int test_nvs_persistence(void)
+{
+    /* Write */
+    nvs_handle_t h;
+    if (nvs_open("test_persist", NVS_READWRITE, &h) != ESP_OK) return 0;
+    nvs_erase_all(h);
+    nvs_set_u32(h, "magic", 0xDEADBEEF);
+    nvs_commit(h);
+    nvs_close(h);
+
+    /* Reopen and read */
+    if (nvs_open("test_persist", NVS_READONLY, &h) != ESP_OK) return 0;
+    uint32_t val;
+    int result = (nvs_get_u32(h, "magic", &val) == ESP_OK && val == 0xDEADBEEF);
+    nvs_close(h);
+    return result;
+}
+
+/* ---- Test 25: NVS erase key ---- */
+
+static int test_nvs_erase(void)
+{
+    nvs_handle_t h;
+    if (nvs_open("test_erase", NVS_READWRITE, &h) != ESP_OK) return 0;
+    nvs_erase_all(h);
+
+    nvs_set_u32(h, "a", 1);
+    nvs_set_u32(h, "b", 2);
+    nvs_commit(h);
+
+    nvs_erase_key(h, "a");
+    nvs_commit(h);
+
+    uint32_t val;
+    int result = (nvs_get_u32(h, "a", &val) == ESP_ERR_NVS_NOT_FOUND);
+    if (result)
+        result = (nvs_get_u32(h, "b", &val) == ESP_OK && val == 2);
+
+    nvs_close(h);
+    return result;
+}
+
+/* ---- Test 26: esp_random ---- */
+
+static int test_esp_random(void)
+{
+    /* Generate several random numbers, verify they're not all the same */
+    uint32_t vals[8];
+    for (int i = 0; i < 8; i++)
+        vals[i] = esp_random();
+
+    int different = 0;
+    for (int i = 1; i < 8; i++) {
+        if (vals[i] != vals[0]) { different = 1; break; }
+    }
+
+    /* Also test esp_fill_random */
+    uint8_t buf[16];
+    memset(buf, 0, sizeof(buf));
+    esp_fill_random(buf, sizeof(buf));
+
+    int nonzero = 0;
+    for (int i = 0; i < 16; i++) {
+        if (buf[i] != 0) { nonzero = 1; break; }
+    }
+
+    return different && nonzero;
+}
+
+/* ---- Test 27: esp_system basics ---- */
+
+static int test_esp_system(void)
+{
+    /* Reset reason should be POWERON */
+    if (esp_reset_reason() != ESP_RST_POWERON) return 0;
+
+    /* Heap sizes should be reasonable */
+    uint32_t free_heap = esp_get_free_heap_size();
+    uint32_t min_heap = esp_get_minimum_free_heap_size();
+    if (free_heap == 0 || min_heap == 0) return 0;
+    if (min_heap > free_heap) return 0;
+
+    return 1;
+}
+
 /* ---- Main ---- */
 
 void app_main(void)
@@ -726,14 +964,43 @@ void app_main(void)
     test_status("Wait-any", 1);
     test_result("Wait-any", test_event_group_any());
 
-    /* --- Timers --- */
-    test_header(" Timers");
+    /* --- FreeRTOS Timers --- */
+    test_header(" FreeRTOS Timers");
     test_status("One-shot timer", 1);
     test_result("One-shot timer", test_timer_oneshot());
     test_status("Periodic timer", 1);
     test_result("Periodic timer", test_timer_periodic());
     test_status("Timer ID", 1);
     test_result("Timer ID", test_timer_id());
+
+    /* --- ESP-IDF APIs (page 3) --- */
+    vTaskDelay(2000);
+    display_clear(COL_BG);
+    test_row = 0;
+
+    test_header(" esp_timer");
+    test_status("One-shot", 1);
+    test_result("One-shot", test_esp_timer_oneshot());
+    test_status("Periodic", 1);
+    test_result("Periodic", test_esp_timer_periodic());
+    test_status("get_time", 1);
+    test_result("get_time", test_esp_timer_get_time());
+
+    test_header(" NVS");
+    test_status("Integer set/get", 1);
+    test_result("Integer set/get", test_nvs_integers());
+    test_status("String set/get", 1);
+    test_result("String set/get", test_nvs_string());
+    test_status("Persistence", 1);
+    test_result("Persistence", test_nvs_persistence());
+    test_status("Erase key", 1);
+    test_result("Erase key", test_nvs_erase());
+
+    test_header(" esp_system");
+    test_status("esp_random", 1);
+    test_result("esp_random", test_esp_random());
+    test_status("System basics", 1);
+    test_result("System basics", test_esp_system());
 
     /* --- Summary --- */
     test_row++;

@@ -523,6 +523,8 @@ static void *app_thread_func(void *arg)
 
 /* From emu_freertos.c */
 extern void emu_freertos_shutdown(void);
+/* From emu_timer.c */
+extern void emu_esp_timer_shutdown(void);
 
 static void stop_app_thread(void)
 {
@@ -531,6 +533,7 @@ static void stop_app_thread(void)
     pthread_join(app_thread, NULL);
     app_thread_valid = 0;
     emu_freertos_shutdown();
+    emu_esp_timer_shutdown();
 }
 
 static int start_app_thread(void)
