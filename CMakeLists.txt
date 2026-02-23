@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.10)
+cmake_minimum_required(VERSION 3.14)
 project(cyd-emulator C)
 
 # App source directory (ESP32 firmware sources)
@@ -22,7 +22,7 @@ if(NOT EXISTS "${APP_SOURCE_DIR}/main.c")
     message(FATAL_ERROR
         "APP_SOURCE_DIR=${APP_SOURCE_DIR} does not contain main.c.\n"
         "Pass -DAPP_SOURCE_DIR=<path-to-esp32/main>\n"
-        "Built-in demos: demos/nolibrary, demos/freertos")
+        "Built-in demos: demos/nolibrary, demos/freertos, demos/lvgl")
 endif()
 
 # Detect standalone mode: full firmware has gpt.c + external image decoders
@@ -33,12 +33,50 @@ else()
     set(EMU_STANDALONE ON)
 endif()
 
+# LVGL support: auto-detect from demos/lvgl or explicit -DEMU_USE_LVGL=ON
+option(EMU_USE_LVGL "Build with LVGL support" OFF)
+get_filename_component(_app_dir_name "${APP_SOURCE_DIR}" NAME)
+get_filename_component(_app_parent "${APP_SOURCE_DIR}" DIRECTORY)
+get_filename_component(_app_parent_name "${_app_parent}" NAME)
+if(_app_parent_name STREQUAL "demos" AND _app_dir_name STREQUAL "lvgl")
+    set(EMU_USE_LVGL ON)
+endif()
+
 # Common demo headers (display.h, touch.h, etc.) for standalone builds
 set(DEMO_COMMON_DIR "${CMAKE_SOURCE_DIR}/demos/common")
 
 # Find SDL2
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(SDL2 REQUIRED sdl2)
+
+# ---- LVGL via FetchContent ----
+if(EMU_USE_LVGL)
+    include(FetchContent)
+
+    # Point LVGL at our lv_conf.h
+    set(LV_CONF_PATH "${CMAKE_SOURCE_DIR}/include/lv_conf.h"
+        CACHE STRING "Path to lv_conf.h" FORCE)
+
+    # Disable LVGL components we don't need
+    set(LV_CONF_BUILD_DISABLE_DEMOS ON CACHE BOOL "" FORCE)
+    set(LV_CONF_BUILD_DISABLE_EXAMPLES ON CACHE BOOL "" FORCE)
+    set(LV_CONF_BUILD_DISABLE_THORVG_INTERNAL ON CACHE BOOL "" FORCE)
+
+    FetchContent_Declare(lvgl
+        GIT_REPOSITORY https://github.com/lvgl/lvgl.git
+        GIT_TAG        v9.2.2
+        GIT_SHALLOW    TRUE
+    )
+    FetchContent_MakeAvailable(lvgl)
+
+    # LVGL's CMake globs *.S files which includes ARM Helium/NEON assembly.
+    # Remove them on non-ARM platforms.
+    get_target_property(_lvgl_srcs lvgl SOURCES)
+    list(FILTER _lvgl_srcs EXCLUDE REGEX "\\.(S|s)$")
+    set_target_properties(lvgl PROPERTIES SOURCES "${_lvgl_srcs}")
+
+    message(STATUS "LVGL enabled (v9.2.2)")
+endif()
 
 # Emulator sources
 set(EMU_SOURCES
@@ -51,6 +89,10 @@ set(EMU_SOURCES
     src/emu_json.c
     src/emu_freertos.c
 )
+
+if(EMU_USE_LVGL)
+    list(APPEND EMU_SOURCES src/emu_lvgl.c)
+endif()
 
 if(EMU_STANDALONE)
     # Standalone/demo: minimal app sources
@@ -84,7 +126,7 @@ add_executable(cyd-emulator ${EMU_SOURCES} ${APP_SOURCES})
 
 # Include paths: emulator shims first, then app headers
 target_include_directories(cyd-emulator PRIVATE
-    ${CMAKE_SOURCE_DIR}/include      # ESP-IDF shim headers
+    ${CMAKE_SOURCE_DIR}/include      # ESP-IDF shim headers + lv_conf.h
     ${APP_SOURCE_DIR}                # App-specific headers
     ${SDL2_INCLUDE_DIRS}
 )
@@ -111,6 +153,10 @@ if(NOT EMU_STANDALONE)
     target_link_libraries(cyd-emulator PRIVATE miniz)
 endif()
 
+if(EMU_USE_LVGL)
+    target_link_libraries(cyd-emulator PRIVATE lvgl)
+endif()
+
 target_compile_options(cyd-emulator PRIVATE
     -Wall -Wextra -Wno-unused-parameter
     ${SDL2_CFLAGS_OTHER}
@@ -121,4 +167,8 @@ target_compile_definitions(cyd-emulator PRIVATE _GNU_SOURCE)
 
 if(EMU_STANDALONE)
     target_compile_definitions(cyd-emulator PRIVATE EMU_STANDALONE)
+endif()
+
+if(EMU_USE_LVGL)
+    target_compile_definitions(cyd-emulator PRIVATE EMU_USE_LVGL)
 endif()

@@ -21,18 +21,20 @@ This builds and runs the FreeRTOS test suite demo by default (when no external f
 
 ### Built-in demos
 
-Two demo apps are included:
+Three demo apps are included:
 
 | Demo | Directory | Description |
 |------|-----------|-------------|
 | **freertos** | `demos/freertos` | FreeRTOS primitives test suite (tasks, semaphores, queues, event groups, timers) |
 | **nolibrary** | `demos/nolibrary` | Interactive drawing pad using bare display/touch APIs |
+| **lvgl** | `demos/lvgl` | LVGL UI demo (buttons, slider, switch) — auto-fetches LVGL v9.2 |
 
 Select a demo with:
 
 ```bash
 cmake -DAPP_SOURCE_DIR=demos/nolibrary ..
 cmake -DAPP_SOURCE_DIR=demos/freertos ..
+cmake -DAPP_SOURCE_DIR=demos/lvgl ..    # fetches LVGL automatically
 ```
 
 ## What it does
@@ -43,6 +45,7 @@ cmake -DAPP_SOURCE_DIR=demos/freertos ..
 - Attaches FAT32 or exFAT SD card images via File menu
 - Provides ESP-IDF shim headers so `#include "esp_log.h"` etc. just work
 - FreeRTOS primitives: tasks, semaphores, queues, event groups, timers
+- LVGL v9 support: auto-fetched at build time, renders into emulator window
 - Info panel shows chip model, display resolution, touch events, and SD card status
 - Supports multiple CYD board profiles (`--board 2432S028R`, `--board 8048S070`, etc.)
 
@@ -51,9 +54,10 @@ cmake -DAPP_SOURCE_DIR=demos/freertos ..
 ### Dependencies
 
 - SDL2 development libraries
-- CMake 3.10+
+- CMake 3.14+
 - The ESP32 firmware source (or use a built-in demo)
 - miniz (`libminiz-dev`, only needed when building with external firmware)
+- LVGL is fetched automatically when building the LVGL demo
 
 ### Build
 
@@ -99,11 +103,13 @@ src/
   emu_crc32.c     CRC32 shim: wraps miniz crc32
   emu_json.c      Minimal JSON parser for board profile configs
   emu_freertos.c  FreeRTOS emulation: tasks, semaphores, queues, timers
+  emu_lvgl.c      LVGL display/input drivers (flush to framebuf, touch input)
 
 demos/
   common/         Shared API headers (display.h, touch.h, etc.) and font data
   nolibrary/      Drawing pad demo (no FreeRTOS beyond vTaskDelay)
   freertos/       FreeRTOS test suite
+  lvgl/           LVGL UI demo (buttons, slider, switch)
 
 include/          ESP-IDF shim headers (esp_log.h, freertos/*.h, etc.)
 ```
