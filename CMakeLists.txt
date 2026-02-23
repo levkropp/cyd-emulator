@@ -88,6 +88,9 @@ set(EMU_SOURCES
     src/emu_crc32.c
     src/emu_json.c
     src/emu_freertos.c
+    src/emu_timer.c
+    src/emu_nvs.c
+    src/emu_system.c
 )
 
 if(EMU_USE_LVGL)
