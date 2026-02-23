@@ -91,6 +91,7 @@ set(EMU_SOURCES
     src/emu_timer.c
     src/emu_nvs.c
     src/emu_system.c
+    src/emu_gpio.c
 )
 
 if(EMU_USE_LVGL)

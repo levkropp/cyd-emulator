@@ -26,6 +26,9 @@
 #include "nvs.h"
 #include "esp_system.h"
 #include "esp_random.h"
+#include "driver/gpio.h"
+#include "driver/ledc.h"
+#include "driver/adc.h"
 
 static const char *TAG = "test";
 
@@ -897,6 +900,102 @@ static int test_esp_system(void)
     return 1;
 }
 
+/* ---- Test 28: GPIO set/get level ---- */
+
+static int test_gpio(void)
+{
+    /* Configure pin 21 as output */
+    gpio_config_t cfg = {
+        .pin_bit_mask = (1ULL << 21),
+        .mode = GPIO_MODE_OUTPUT,
+        .pull_up_en = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE,
+    };
+    if (gpio_config(&cfg) != ESP_OK) return 0;
+
+    /* Default level should be 0 */
+    if (gpio_get_level(GPIO_NUM_21) != 0) return 0;
+
+    /* Set high and read back */
+    gpio_set_level(GPIO_NUM_21, 1);
+    if (gpio_get_level(GPIO_NUM_21) != 1) return 0;
+
+    /* Set low and read back */
+    gpio_set_level(GPIO_NUM_21, 0);
+    if (gpio_get_level(GPIO_NUM_21) != 0) return 0;
+
+    /* Test a different pin */
+    gpio_set_direction(GPIO_NUM_2, GPIO_MODE_OUTPUT);
+    gpio_set_level(GPIO_NUM_2, 1);
+    if (gpio_get_level(GPIO_NUM_2) != 1) return 0;
+
+    /* Pin 21 should still be 0 */
+    if (gpio_get_level(GPIO_NUM_21) != 0) return 0;
+
+    return 1;
+}
+
+/* ---- Test 29: LEDC duty cycle ---- */
+
+static int test_ledc(void)
+{
+    ledc_timer_config_t timer_cfg = {
+        .speed_mode = LEDC_LOW_SPEED_MODE,
+        .duty_resolution = LEDC_TIMER_13_BIT,
+        .timer_num = LEDC_TIMER_0,
+        .freq_hz = 5000,
+        .clk_cfg = LEDC_AUTO_CLK,
+    };
+    if (ledc_timer_config(&timer_cfg) != ESP_OK) return 0;
+
+    ledc_channel_config_t ch_cfg = {
+        .gpio_num = 21,
+        .speed_mode = LEDC_LOW_SPEED_MODE,
+        .channel = LEDC_CHANNEL_0,
+        .intr_type = LEDC_INTR_DISABLE,
+        .timer_sel = LEDC_TIMER_0,
+        .duty = 4096,
+        .hpoint = 0,
+    };
+    if (ledc_channel_config(&ch_cfg) != ESP_OK) return 0;
+
+    /* Initial duty from channel config */
+    if (ledc_get_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0) != 4096) return 0;
+
+    /* Set new duty */
+    ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, 8000);
+    ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
+    if (ledc_get_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0) != 8000) return 0;
+
+    /* Different channel should be independent */
+    ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1, 1000);
+    if (ledc_get_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1) != 1000) return 0;
+    if (ledc_get_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0) != 8000) return 0;
+
+    return 1;
+}
+
+/* ---- Test 30: ADC read ---- */
+
+static int test_adc(void)
+{
+    /* Configure 12-bit width */
+    if (adc1_config_width(ADC_WIDTH_BIT_12) != ESP_OK) return 0;
+    if (adc1_config_channel_atten(ADC1_CHANNEL_0, ADC_ATTEN_DB_11) != ESP_OK) return 0;
+
+    /* Should return midpoint for 12-bit (2048) */
+    int raw = adc1_get_raw(ADC1_CHANNEL_0);
+    if (raw != 2048) return 0;
+
+    /* Switch to 10-bit, should return 512 */
+    adc1_config_width(ADC_WIDTH_BIT_10);
+    raw = adc1_get_raw(ADC1_CHANNEL_0);
+    if (raw != 512) return 0;
+
+    return 1;
+}
+
 /* ---- Main ---- */
 
 void app_main(void)
@@ -1001,6 +1100,14 @@ void app_main(void)
     test_result("esp_random", test_esp_random());
     test_status("System basics", 1);
     test_result("System basics", test_esp_system());
+
+    test_header(" GPIO / Peripherals");
+    test_status("GPIO set/get", 1);
+    test_result("GPIO set/get", test_gpio());
+    test_status("LEDC duty cycle", 1);
+    test_result("LEDC duty cycle", test_ledc());
+    test_status("ADC read", 1);
+    test_result("ADC read", test_adc());
 
     /* --- Summary --- */
     test_row++;
