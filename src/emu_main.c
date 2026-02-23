@@ -521,12 +521,16 @@ static void *app_thread_func(void *arg)
     return NULL;
 }
 
+/* From emu_freertos.c */
+extern void emu_freertos_shutdown(void);
+
 static void stop_app_thread(void)
 {
     if (!app_thread_valid) return;
     emu_app_running = 0;
     pthread_join(app_thread, NULL);
     app_thread_valid = 0;
+    emu_freertos_shutdown();
 }
 
 static int start_app_thread(void)
@@ -1171,7 +1175,7 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    /* Start the app thread (conditionally) */
+    /* Start the app thread */
     if (emu_payload_path) {
         if (!board_explicit) {
             /* Show board dialog; if cancelled, enter waiting state */
@@ -1186,6 +1190,15 @@ int main(int argc, char *argv[])
             }
         }
     }
+#ifdef EMU_STANDALONE
+    else {
+        /* Standalone mode: start app thread immediately (no payload required) */
+        if (start_app_thread() != 0) {
+            SDL_Quit();
+            return 1;
+        }
+    }
+#endif
 
     /* Pixel buffers */
     uint32_t disp_pixels[DISPLAY_WIDTH * DISPLAY_HEIGHT];
