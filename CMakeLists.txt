@@ -33,6 +33,12 @@ else()
     set(EMU_STANDALONE ON)
 endif()
 
+# flexe Xtensa emulator: enables --firmware mode
+option(EMU_USE_FLEXE "Build with flexe Xtensa emulator" ON)
+if(EMU_USE_FLEXE)
+    add_subdirectory(flexe)
+endif()
+
 # LVGL support: auto-detect from demos/lvgl or explicit -DEMU_USE_LVGL=ON
 option(EMU_USE_LVGL "Build with LVGL support" OFF)
 get_filename_component(_app_dir_name "${APP_SOURCE_DIR}" NAME)
@@ -92,7 +98,11 @@ set(EMU_SOURCES
     src/emu_nvs.c
     src/emu_system.c
     src/emu_gpio.c
+    src/emu_flexe.c
 )
+
+# Base sources (without LVGL) — used by non-LVGL demo targets
+set(EMU_SOURCES_BASE ${EMU_SOURCES})
 
 if(EMU_USE_LVGL)
     list(APPEND EMU_SOURCES src/emu_lvgl.c)
@@ -161,13 +171,19 @@ if(EMU_USE_LVGL)
     target_link_libraries(cyd-emulator PRIVATE lvgl)
 endif()
 
+if(EMU_USE_FLEXE)
+    target_link_libraries(cyd-emulator PRIVATE xtensa-emu-lib)
+endif()
+
 target_compile_options(cyd-emulator PRIVATE
     -Wall -Wextra -Wno-unused-parameter
     ${SDL2_CFLAGS_OTHER}
 )
 
 # Need _GNU_SOURCE for ftruncate, fseeko, etc.
-target_compile_definitions(cyd-emulator PRIVATE _GNU_SOURCE)
+target_compile_definitions(cyd-emulator PRIVATE _GNU_SOURCE
+    EMU_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+    EMU_BUILD_DIR="${CMAKE_BINARY_DIR}")
 
 if(EMU_STANDALONE)
     target_compile_definitions(cyd-emulator PRIVATE EMU_STANDALONE)
@@ -176,3 +192,44 @@ endif()
 if(EMU_USE_LVGL)
     target_compile_definitions(cyd-emulator PRIVATE EMU_USE_LVGL)
 endif()
+
+if(EMU_USE_FLEXE)
+    target_compile_definitions(cyd-emulator PRIVATE EMU_USE_FLEXE)
+endif()
+
+# ---- Demo build targets ----
+macro(add_demo NAME DIR)
+    add_executable(cyd-emu-${NAME}
+        ${EMU_SOURCES_BASE}
+        ${CMAKE_SOURCE_DIR}/demos/${DIR}/main.c
+        ${CMAKE_SOURCE_DIR}/demos/common/font.c
+    )
+    target_include_directories(cyd-emu-${NAME} PRIVATE
+        ${CMAKE_SOURCE_DIR}/include
+        ${CMAKE_SOURCE_DIR}/demos/${DIR}
+        ${CMAKE_SOURCE_DIR}/demos/common
+        ${SDL2_INCLUDE_DIRS}
+    )
+    target_link_libraries(cyd-emu-${NAME} PRIVATE ${SDL2_LIBRARIES} pthread)
+    target_compile_options(cyd-emu-${NAME} PRIVATE -Wall -Wextra -Wno-unused-parameter ${SDL2_CFLAGS_OTHER})
+    target_compile_definitions(cyd-emu-${NAME} PRIVATE _GNU_SOURCE EMU_STANDALONE
+        EMU_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+        EMU_BUILD_DIR="${CMAKE_BINARY_DIR}")
+    if(EMU_USE_FLEXE)
+        target_link_libraries(cyd-emu-${NAME} PRIVATE xtensa-emu-lib)
+        target_compile_definitions(cyd-emu-${NAME} PRIVATE EMU_USE_FLEXE)
+    endif()
+endmacro()
+
+add_demo(freertos freertos)
+add_demo(nolibrary nolibrary)
+
+# LVGL demo (conditional — requires LVGL fetch)
+if(EMU_USE_LVGL)
+    add_demo(lvgl lvgl)
+    target_sources(cyd-emu-lvgl PRIVATE src/emu_lvgl.c)
+    target_link_libraries(cyd-emu-lvgl PRIVATE lvgl)
+    target_compile_definitions(cyd-emu-lvgl PRIVATE EMU_USE_LVGL)
+endif()
+
+add_custom_target(demos DEPENDS cyd-emu-freertos cyd-emu-nolibrary)
