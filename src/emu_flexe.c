@@ -194,7 +194,7 @@ int emu_flexe_init(const char *bin_path, const char *elf_path)
     /* Set entry point and initial stack pointer */
     if (res.entry_point != 0)
         cpu.pc = res.entry_point;
-    ar_write(&cpu, 1, 0x3FFE0000u);  /* SP in SRAM data */
+    ar_write(&cpu, 1, 0x3FFF8000u);  /* SP in SRAM (above heap region) */
 
     flexe_active = 1;
     return 0;
@@ -232,6 +232,12 @@ void emu_flexe_shutdown(void)
 int emu_flexe_active(void)
 {
     return flexe_active;
+}
+
+uint32_t emu_flexe_mem_read32(uint32_t addr)
+{
+    if (!flexe_active || !mem) return 0;
+    return mem_read32(mem, addr);
 }
 
 #endif /* EMU_USE_FLEXE */
