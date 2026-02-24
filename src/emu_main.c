@@ -29,6 +29,7 @@
 #include "emu_board.h"
 #include "emu_json.h"
 #include "emu_flexe.h"
+#include "emu_control.h"
 
 /* ---- Globals from other emulator modules ---- */
 
@@ -67,6 +68,9 @@ extern void app_main(void);
 /* Flexe firmware paths */
 static const char *firmware_path = NULL;
 static const char *elf_path = NULL;
+
+/* Control socket path */
+static const char *control_path = NULL;
 
 /* ---- Board profile ---- */
 const struct board_profile *emu_active_board = NULL;
@@ -1193,6 +1197,7 @@ static void usage(const char *prog)
         "  --sdcard-size <size>    SD card size, e.g. 4G (default: 4G)\n"
         "  --scale <n>             Display scale factor 1-4 (default: 2)\n"
         "  --turbo                 Start in turbo mode (instant SD I/O)\n"
+        "  --control <path>        Unix socket path for scripted control\n"
         "\n"
         "Controls:\n"
         "  Click on display   Tap touchscreen\n"
@@ -1260,6 +1265,8 @@ int main(int argc, char *argv[])
             firmware_path = argv[++i];
         } else if (strcmp(argv[i], "--elf") == 0 && i + 1 < argc) {
             elf_path = argv[++i];
+        } else if (strcmp(argv[i], "--control") == 0 && i + 1 < argc) {
+            control_path = argv[++i];
         } else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
             usage(argv[0]);
             return 0;
@@ -1349,6 +1356,8 @@ int main(int argc, char *argv[])
         printf("  Payload: %s\n", emu_payload_path ? emu_payload_path : "(none)");
     }
     printf("  Speed:   %s\n", emu_turbo_mode ? "turbo" : "normal (hardware-accurate)");
+    if (control_path)
+        printf("  Control: %s\n", control_path);
     printf("\n");
 
     /* Initialize SDL */
@@ -1411,6 +1420,14 @@ int main(int argc, char *argv[])
         SDL_DestroyWindow(s_window);
         SDL_Quit();
         return 1;
+    }
+
+    /* Initialize control socket (non-fatal on failure) */
+    if (control_path) {
+        if (emu_control_init(control_path) == 0)
+            printf("Control socket listening on %s\n", control_path);
+        else
+            fprintf(stderr, "Warning: failed to create control socket %s\n", control_path);
     }
 
     /* Start the app thread */
@@ -1668,10 +1685,14 @@ int main(int argc, char *argv[])
         }
 
         SDL_RenderPresent(s_renderer);
+
+        emu_control_poll();
+
         SDL_Delay(16);
     }
 
     /* Clean shutdown */
+    emu_control_shutdown();
     stop_app_thread();
 
     free(panel_pixels);
