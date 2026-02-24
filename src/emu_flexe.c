@@ -17,12 +17,24 @@
 #include "elf_symbols.h"
 #include "freertos_stubs.h"
 #include "esp_timer_stubs.h"
+#include "display_stubs.h"
+#include "touch_stubs.h"
+#include "sdcard_stubs.h"
 
 #include <stdio.h>
 #include <string.h>
+#include <pthread.h>
 
 /* From emu_touch.c */
 extern volatile int emu_app_running;
+extern bool touch_read(int *x, int *y);
+
+/* From emu_display.c */
+extern uint16_t emu_framebuf[];
+extern pthread_mutex_t emu_framebuf_mutex;
+
+/* From emu_sdcard.c or emu_main.c */
+extern const char *emu_sdcard_path;
 
 /* From emu_main.c (log ring buffer) */
 extern char emu_log_ring[][48];
@@ -38,6 +50,9 @@ static esp32_periph_t    *periph;
 static esp32_rom_stubs_t *rom;
 static freertos_stubs_t  *frt;
 static esp_timer_stubs_t *etimer;
+static display_stubs_t   *dstubs;
+static touch_stubs_t     *tstubs;
+static sdcard_stubs_t    *sstubs;
 static elf_symbols_t     *syms;
 
 /* UART line accumulator */
@@ -70,6 +85,13 @@ static void uart_log_cb(void *ctx, uint8_t byte)
     }
     if (uart_pos < (int)sizeof(uart_line) - 1)
         uart_line[uart_pos++] = (char)byte;
+}
+
+/* Bridge callback: read touch state from emu_touch.c */
+static int flexe_touch_read(int *x, int *y, void *ctx)
+{
+    (void)ctx;
+    return touch_read(x, y) ? 1 : 0;
 }
 
 int emu_flexe_init(const char *bin_path, const char *elf_path)
@@ -140,6 +162,32 @@ int emu_flexe_init(const char *bin_path, const char *elf_path)
     if (etimer && syms)
         esp_timer_stubs_hook_symbols(etimer, syms);
 
+    /* Display stubs — render to shared framebuffer */
+    dstubs = display_stubs_create(&cpu);
+    if (dstubs) {
+        display_stubs_set_framebuf(dstubs, emu_framebuf, &emu_framebuf_mutex,
+                                    320, 240);
+        if (syms)
+            display_stubs_hook_symbols(dstubs, syms);
+    }
+
+    /* Touch stubs — read from SDL mouse input */
+    tstubs = touch_stubs_create(&cpu);
+    if (tstubs) {
+        touch_stubs_set_state_fn(tstubs, flexe_touch_read, NULL);
+        if (syms)
+            touch_stubs_hook_symbols(tstubs, syms);
+    }
+
+    /* SD card stubs — file-backed image */
+    sstubs = sdcard_stubs_create(&cpu);
+    if (sstubs) {
+        if (emu_sdcard_path)
+            sdcard_stubs_set_image(sstubs, emu_sdcard_path);
+        if (syms)
+            sdcard_stubs_hook_symbols(sstubs, syms);
+    }
+
     /* Set entry point and initial stack pointer */
     if (res.entry_point != 0)
         cpu.pc = res.entry_point;
@@ -165,6 +213,9 @@ void emu_flexe_shutdown(void)
 {
     if (!flexe_active) return;
 
+    sdcard_stubs_destroy(sstubs);    sstubs = NULL;
+    touch_stubs_destroy(tstubs);     tstubs = NULL;
+    display_stubs_destroy(dstubs);   dstubs = NULL;
     esp_timer_stubs_destroy(etimer); etimer = NULL;
     freertos_stubs_destroy(frt);     frt = NULL;
     rom_stubs_destroy(rom);          rom = NULL;
