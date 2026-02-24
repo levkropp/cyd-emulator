@@ -300,6 +300,12 @@ void emu_control_poll(void)
         handle_log(client);
     } else if (strcmp(buf, "quit") == 0) {
         handle_quit(client);
+    } else if (strncmp(buf, "peek ", 5) == 0) {
+        uint32_t addr = (uint32_t)strtoul(buf + 5, NULL, 0);
+        uint32_t val = emu_flexe_mem_read32(addr);
+        char resp[64];
+        snprintf(resp, sizeof(resp), "OK 0x%08X = 0x%08X (%u)\n", addr, val, val);
+        send_str(client, resp);
     } else {
         send_str(client, "ERR unknown command\n");
     }
