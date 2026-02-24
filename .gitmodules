@@ -1,0 +1,3 @@
+[submodule "flexe"]
+	path = flexe
+	url = https://github.com/levkropp/flexe.git

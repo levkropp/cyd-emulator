@@ -18,6 +18,7 @@
 #include <pthread.h>
 #include <time.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 #include <SDL2/SDL.h>
 
@@ -27,6 +28,7 @@
 #include "payload.h"
 #include "emu_board.h"
 #include "emu_json.h"
+#include "emu_flexe.h"
 
 /* ---- Globals from other emulator modules ---- */
 
@@ -59,8 +61,12 @@ extern int  emu_log_head;
 int emu_chip_model = 1;  /* CHIP_ESP32 */
 int emu_chip_cores = 2;
 
-/* From main.c (app firmware) */
+/* From main.c (app firmware) — only needed when not running flexe */
 extern void app_main(void);
+
+/* Flexe firmware paths */
+static const char *firmware_path = NULL;
+static const char *elf_path = NULL;
 
 /* ---- Board profile ---- */
 const struct board_profile *emu_active_board = NULL;
@@ -122,6 +128,15 @@ enum { MENU_CLOSED = 0, MENU_FILE, MENU_VIEW, MENU_HELP };
 static int menu_open = MENU_CLOSED;
 static int menu_hover = -1;
 
+/* ---- Build thread state (for Open Project) ---- */
+#define BUILD_LOG_LINES 12
+#define BUILD_LOG_COLS  48
+static char build_log[BUILD_LOG_LINES][BUILD_LOG_COLS];
+static int  build_log_head = 0;
+static char build_status[64] = "";
+static volatile int build_running = 0;
+static volatile int build_result = -1;  /* -1=idle, 0=success, 1=cmake fail, 2=make fail */
+
 /* Menu header pixel positions */
 #define MENU_HDR_H   MENU_BAR_HEIGHT
 static const struct { const char *label; int x, w; } menu_hdrs[] = {
@@ -136,7 +151,7 @@ static const struct { const char *label; int x, w; } menu_hdrs[] = {
 #define DROP_W        (DROP_CHARS * FONT_WIDTH)   /* 192px */
 #define DROP_ITEM_H   FONT_HEIGHT                 /* 16px per item */
 
-#define FILE_ITEMS    6
+#define FILE_ITEMS    8
 #define VIEW_ITEMS    5
 #define HELP_ITEMS    2
 
@@ -258,6 +273,8 @@ static void render_panel(uint32_t *buf, int pw, int ph)
     panel_line(buf, pw, ph, row++, PANEL_FG, "  SD:    %d slot%s",
                b->sd_slots, b->sd_slots != 1 ? "s" : "");
     panel_line(buf, pw, ph, row++, PANEL_FG, "  USB:   %s", b->usb_type);
+    panel_line(buf, pw, ph, row++, PANEL_FG, "  Mode:  %s",
+               emu_flexe_active() ? "flexe" : "native");
     row++;
 
     panel_line(buf, pw, ph, row++, PANEL_HEAD, " Touch Events");
@@ -347,7 +364,24 @@ static int dropdown_item_count(void)
 
 static int dropdown_is_separator(int item)
 {
-    return (menu_open == MENU_FILE && item == 4);
+    return (menu_open == MENU_FILE && item == 5);
+}
+
+static int dropdown_is_disabled(int item)
+{
+    if (menu_open == MENU_FILE) {
+        /* Disable most items while building */
+        if (build_running && item != 7) return 1;  /* only Quit stays enabled */
+        switch (item) {
+#ifdef EMU_STANDALONE
+        case 1: return 1;  /* Load Payload — standalone doesn't use payloads */
+#endif
+        case 2: return !app_thread_valid;  /* Attach SD Image */
+        case 3: return !app_thread_valid;  /* Save State */
+        case 6: return !app_thread_valid;  /* Restart App */
+        }
+    }
+    return 0;
 }
 
 static void dropdown_item_label(int item, char *buf, int bufsize)
@@ -356,12 +390,14 @@ static void dropdown_item_label(int item, char *buf, int bufsize)
     switch (menu_open) {
     case MENU_FILE:
         switch (item) {
-        case 0: snprintf(buf, bufsize, " Load Payload..."); break;
-        case 1: snprintf(buf, bufsize, " Attach SD Image..."); break;
-        case 2: snprintf(buf, bufsize, " Save State..."); break;
-        case 3: snprintf(buf, bufsize, " Load State..."); break;
-        case 4: break; /* separator */
-        case 5: snprintf(buf, bufsize, " Quit             Q"); break;
+        case 0: snprintf(buf, bufsize, " Open Project..."); break;
+        case 1: snprintf(buf, bufsize, " Load Payload..."); break;
+        case 2: snprintf(buf, bufsize, " Attach SD Image..."); break;
+        case 3: snprintf(buf, bufsize, " Save State..."); break;
+        case 4: snprintf(buf, bufsize, " Load State..."); break;
+        case 5: break; /* separator */
+        case 6: snprintf(buf, bufsize, " Restart App      R"); break;
+        case 7: snprintf(buf, bufsize, " Quit             Q"); break;
         }
         break;
     case MENU_VIEW:
@@ -409,6 +445,14 @@ static int render_dropdown(uint32_t *buf, int bw, int bh)
         if (dropdown_is_separator(i)) {
             int sep_y = iy + DROP_ITEM_H / 2;
             fill_rect_buf(buf, bw, bh, 4, sep_y, bw - 8, 1, MENU_SEP_CLR);
+            continue;
+        }
+
+        /* Disabled items render dim, no hover */
+        if (dropdown_is_disabled(i)) {
+            char label[DROP_CHARS + 1];
+            dropdown_item_label(i, label, sizeof(label));
+            render_text(buf, bw, bh, 0, iy, label, MENU_DIM);
             continue;
         }
 
@@ -511,12 +555,45 @@ static char *zenity_save(const char *title, const char *filter)
     return result;
 }
 
+/* Returns malloc'd path or NULL. Caller must free(). */
+static char *zenity_open_dir(const char *title)
+{
+    if (!zenity_available()) {
+        printf("zenity not available\n");
+        return NULL;
+    }
+
+    char cmd[512];
+    snprintf(cmd, sizeof(cmd),
+             "zenity --file-selection --directory --title='%s' 2>/dev/null",
+             title);
+
+    FILE *f = popen(cmd, "r");
+    if (!f) return NULL;
+
+    char buf[1024];
+    char *result = NULL;
+    if (fgets(buf, sizeof(buf), f)) {
+        size_t len = strlen(buf);
+        while (len > 0 && (buf[len-1] == '\n' || buf[len-1] == '\r'))
+            buf[--len] = '\0';
+        if (len > 0)
+            result = strdup(buf);
+    }
+    pclose(f);
+    return result;
+}
+
 /* ---- App thread management ---- */
 
 static void *app_thread_func(void *arg)
 {
     (void)arg;
-    app_main();
+    if (emu_flexe_active()) {
+        emu_flexe_run();
+    } else {
+        app_main();
+    }
     emu_app_running = 0;
     return NULL;
 }
@@ -532,6 +609,7 @@ static void stop_app_thread(void)
     emu_app_running = 0;
     pthread_join(app_thread, NULL);
     app_thread_valid = 0;
+    emu_flexe_shutdown();
     emu_freertos_shutdown();
     emu_esp_timer_shutdown();
 }
@@ -815,6 +893,131 @@ static void do_load_payload(void)
     start_app_thread();
 }
 
+/* ---- Open Project (rebuild + relaunch) ---- */
+
+/* Saved argv from main() for re-exec */
+static int    saved_argc;
+static char **saved_argv;
+
+static pthread_t build_thread;
+static char build_project_dir[1024];
+
+static void build_log_append(const char *line)
+{
+    strncpy(build_log[build_log_head], line, BUILD_LOG_COLS - 1);
+    build_log[build_log_head][BUILD_LOG_COLS - 1] = '\0';
+    build_log_head = (build_log_head + 1) % BUILD_LOG_LINES;
+}
+
+static int run_cmd_with_log(const char *cmd, const char *phase)
+{
+    snprintf(build_status, sizeof(build_status), "%s", phase);
+    printf("Running: %s\n", cmd);
+
+    FILE *f = popen(cmd, "r");
+    if (!f) return -1;
+
+    char buf[256];
+    while (fgets(buf, sizeof(buf), f)) {
+        /* Strip trailing newline */
+        size_t len = strlen(buf);
+        while (len > 0 && (buf[len-1] == '\n' || buf[len-1] == '\r'))
+            buf[--len] = '\0';
+        if (len > 0) {
+            build_log_append(buf);
+            printf("  %s\n", buf);
+        }
+    }
+    return pclose(f);
+}
+
+static void *build_thread_func(void *arg)
+{
+    (void)arg;
+    char cmd[2048];
+
+#if defined(EMU_SOURCE_DIR) && defined(EMU_BUILD_DIR)
+    /* cmake reconfigure */
+    snprintf(cmd, sizeof(cmd),
+             "cmake -S \"%s\" -B \"%s\" -DAPP_SOURCE_DIR=\"%s\" 2>&1",
+             EMU_SOURCE_DIR, EMU_BUILD_DIR, build_project_dir);
+    int ret = run_cmd_with_log(cmd, "Configuring...");
+    if (ret != 0) {
+        snprintf(build_status, sizeof(build_status), "cmake failed (exit %d)", ret);
+        build_result = 1;
+        build_running = 0;
+        return NULL;
+    }
+
+    /* make */
+    snprintf(cmd, sizeof(cmd),
+             "make -C \"%s\" -j$(nproc) 2>&1", EMU_BUILD_DIR);
+    ret = run_cmd_with_log(cmd, "Building...");
+    if (ret != 0) {
+        snprintf(build_status, sizeof(build_status), "make failed (exit %d)", ret);
+        build_result = 2;
+        build_running = 0;
+        return NULL;
+    }
+
+    snprintf(build_status, sizeof(build_status), "Build complete, relaunching...");
+    build_result = 0;
+#endif
+    build_running = 0;
+    return NULL;
+}
+
+static void do_open_project(void)
+{
+#if !defined(EMU_SOURCE_DIR) || !defined(EMU_BUILD_DIR)
+    printf("Open Project not available (EMU_SOURCE_DIR/EMU_BUILD_DIR not set)\n");
+    return;
+#else
+    if (build_running) return;
+
+    char *dir = zenity_open_dir("Select ESP32 project folder (must contain main.c)");
+    if (!dir) return;
+
+    /* Validate main.c exists */
+    char mainc[1024];
+    snprintf(mainc, sizeof(mainc), "%s/main.c", dir);
+    if (access(mainc, F_OK) != 0) {
+        printf("Error: %s does not contain main.c\n", dir);
+        free(dir);
+        return;
+    }
+
+    stop_app_thread();
+    sdcard_deinit();
+
+    /* Clear build log */
+    for (int i = 0; i < BUILD_LOG_LINES; i++)
+        build_log[i][0] = '\0';
+    build_log_head = 0;
+    build_status[0] = '\0';
+
+    strncpy(build_project_dir, dir, sizeof(build_project_dir) - 1);
+    build_project_dir[sizeof(build_project_dir) - 1] = '\0';
+    free(dir);
+
+    build_running = 1;
+    build_result = -1;
+    pthread_create(&build_thread, NULL, build_thread_func, NULL);
+    /* Build thread runs; main loop renders progress. Completion handled in event loop. */
+#endif
+}
+
+static void do_restart_app(void)
+{
+    if (!app_thread_valid) return;
+    stop_app_thread();
+    sdcard_deinit();
+    payload_init();
+    sdcard_init();
+    start_app_thread();
+    printf("App restarted.\n");
+}
+
 /* ---- Dropdown action execution ---- */
 
 static void dropdown_execute(int item)
@@ -822,11 +1025,13 @@ static void dropdown_execute(int item)
     switch (menu_open) {
     case MENU_FILE:
         switch (item) {
-        case 0: do_load_payload(); break;
-        case 1: do_attach_sd(); break;
-        case 2: do_save_state(); break;
-        case 3: do_load_state(); break;
-        case 5: emu_window_running = 0; emu_app_running = 0; break;  /* Quit */
+        case 0: do_open_project(); break;
+        case 1: do_load_payload(); break;
+        case 2: do_attach_sd(); break;
+        case 3: do_save_state(); break;
+        case 4: do_load_state(); break;
+        case 6: do_restart_app(); break;
+        case 7: emu_window_running = 0; emu_app_running = 0; break;  /* Quit */
         }
         break;
     case MENU_VIEW:
@@ -844,6 +1049,7 @@ static void dropdown_execute(int item)
             printf("\n  Controls:\n"
                    "  Click on display   Tap touchscreen\n"
                    "  Tab                Toggle turbo mode\n"
+                   "  R                  Restart app\n"
                    "  Q / Ctrl+C         Quit\n"
                    "  File menu          Load payload, save/load state\n"
                    "  View menu          Turbo mode, display scale\n\n");
@@ -900,7 +1106,8 @@ static int menu_handle_click(int mx, int my)
 
         if (mx >= dx && mx < dx + DROP_W && my >= dy && my < dy + dh) {
             int item = (my - dy - 1) / DROP_ITEM_H;  /* -1 for top border */
-            if (item >= 0 && item < dropdown_item_count() && !dropdown_is_separator(item)) {
+            if (item >= 0 && item < dropdown_item_count() &&
+                !dropdown_is_separator(item) && !dropdown_is_disabled(item)) {
                 dropdown_execute(item);
             }
             return 1;
@@ -937,7 +1144,8 @@ static void menu_handle_motion(int mx, int my)
 
     if (mx >= dx && mx < dx + DROP_W && my >= dy && my < dy + dh) {
         int item = (my - dy - 1) / DROP_ITEM_H;
-        if (item >= 0 && item < dropdown_item_count() && !dropdown_is_separator(item))
+        if (item >= 0 && item < dropdown_item_count() &&
+            !dropdown_is_separator(item) && !dropdown_is_disabled(item))
             menu_hover = item;
         else
             menu_hover = -1;
@@ -966,6 +1174,10 @@ static void usage(const char *prog)
         "Payload:\n"
         "  --payload <file>        Path to payload.bin (or use File > Load Payload)\n"
         "\n"
+        "Firmware (flexe Xtensa interpreter):\n"
+        "  --firmware <file.bin>   Run ESP32 firmware binary via Xtensa emulator\n"
+        "  --elf <file.elf>        ELF file for symbol hooking (optional)\n"
+        "\n"
         "Board selection:\n"
         "  --board <model>         Select a CYD board profile (default: 2432S028R)\n"
         "  --board list            Show all available board profiles\n"
@@ -985,6 +1197,7 @@ static void usage(const char *prog)
         "Controls:\n"
         "  Click on display   Tap touchscreen\n"
         "  Tab                Toggle turbo mode\n"
+        "  R                  Restart app\n"
         "  Q / Ctrl+C         Quit\n",
         prog);
 }
@@ -1001,6 +1214,9 @@ static void signal_handler(int sig)
 
 int main(int argc, char *argv[])
 {
+    saved_argc = argc;
+    saved_argv = argv;
+
     signal(SIGTERM, signal_handler);
     signal(SIGINT, signal_handler);
 
@@ -1040,6 +1256,10 @@ int main(int argc, char *argv[])
             sdcard_slots_override = atoi(argv[++i]);
         } else if (strcmp(argv[i], "--touch") == 0 && i + 1 < argc) {
             touch_override = argv[++i];
+        } else if (strcmp(argv[i], "--firmware") == 0 && i + 1 < argc) {
+            firmware_path = argv[++i];
+        } else if (strcmp(argv[i], "--elf") == 0 && i + 1 < argc) {
+            elf_path = argv[++i];
         } else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
             usage(argv[0]);
             return 0;
@@ -1104,6 +1324,14 @@ int main(int argc, char *argv[])
     emu_chip_cores = active.cores;
     emu_sdcard_enabled = (active.sd_slots > 0) ? 1 : 0;
 
+    /* Initialize flexe if firmware path given */
+    if (firmware_path) {
+        if (emu_flexe_init(firmware_path, elf_path) != 0) {
+            fprintf(stderr, "Failed to load firmware: %s\n", firmware_path);
+            return 1;
+        }
+    }
+
     printf("\n");
     printf("  CYD Emulator\n");
     printf("  Board:   %s\n", active.model);
@@ -1112,7 +1340,14 @@ int main(int argc, char *argv[])
     printf("  Touch:   %s\n", active.touch_type);
     printf("  SD:      %d slot(s)\n", active.sd_slots);
     printf("  USB:     %s\n", active.usb_type);
-    printf("  Payload: %s\n", emu_payload_path ? emu_payload_path : "(none)");
+    if (emu_flexe_active()) {
+        printf("  Mode:    flexe (Xtensa LX6 interpreter)\n");
+        printf("  Firmware: %s\n", firmware_path);
+        if (elf_path) printf("  ELF:     %s\n", elf_path);
+    } else {
+        printf("  Mode:    native\n");
+        printf("  Payload: %s\n", emu_payload_path ? emu_payload_path : "(none)");
+    }
     printf("  Speed:   %s\n", emu_turbo_mode ? "turbo" : "normal (hardware-accurate)");
     printf("\n");
 
@@ -1179,7 +1414,14 @@ int main(int argc, char *argv[])
     }
 
     /* Start the app thread */
-    if (emu_payload_path) {
+    if (emu_flexe_active()) {
+        /* Flexe mode: firmware already loaded, start interpreter thread */
+        if (start_app_thread() != 0) {
+            emu_flexe_shutdown();
+            SDL_Quit();
+            return 1;
+        }
+    } else if (emu_payload_path) {
         if (!board_explicit) {
             /* Show board dialog; if cancelled, enter waiting state */
             if (show_board_dialog() < 0) {
@@ -1234,8 +1476,8 @@ int main(int argc, char *argv[])
                     if (menu_handle_click(mx, my))
                         break;
 
-                    /* Pass to display touch if in display area */
-                    if (mx < disp_w && my >= MENU_BAR_HEIGHT) {
+                    /* Pass to display touch if in display area and app running */
+                    if (app_thread_valid && mx < disp_w && my >= MENU_BAR_HEIGHT) {
                         int tx = mx / scale;
                         int ty = (my - MENU_BAR_HEIGHT) / scale;
                         emu_touch_update(1, tx, ty);
@@ -1244,7 +1486,7 @@ int main(int argc, char *argv[])
                 break;
 
             case SDL_MOUSEBUTTONUP:
-                if (ev.button.button == SDL_BUTTON_LEFT) {
+                if (ev.button.button == SDL_BUTTON_LEFT && app_thread_valid) {
                     int mx = ev.button.x;
                     int my = ev.button.y;
                     if (mx < disp_w && my >= MENU_BAR_HEIGHT) {
@@ -1262,7 +1504,8 @@ int main(int argc, char *argv[])
                 menu_handle_motion(ev.motion.x, ev.motion.y);
 
                 /* Pass drag to touch */
-                if ((ev.motion.state & SDL_BUTTON_LMASK) &&
+                if (app_thread_valid &&
+                    (ev.motion.state & SDL_BUTTON_LMASK) &&
                     ev.motion.x < disp_w && ev.motion.y >= MENU_BAR_HEIGHT &&
                     menu_open == MENU_CLOSED)
                 {
@@ -1280,6 +1523,8 @@ int main(int argc, char *argv[])
                 }
                 if (ev.key.keysym.sym == SDLK_TAB) {
                     emu_turbo_mode = !emu_turbo_mode;
+                } else if (ev.key.keysym.sym == SDLK_r && menu_open == MENU_CLOSED) {
+                    if (app_thread_valid) do_restart_app();
                 } else if (ev.key.keysym.sym == SDLK_q && menu_open == MENU_CLOSED) {
                     emu_window_running = 0;
                     emu_app_running = 0;
@@ -1289,6 +1534,39 @@ int main(int argc, char *argv[])
                 }
                 break;
             }
+        }
+
+        /* ---- Check build completion ---- */
+        if (!build_running && build_result >= 0) {
+            if (build_result == 0) {
+                /* Build succeeded — relaunch */
+                pthread_join(build_thread, NULL);
+                char exe_path[1024];
+                snprintf(exe_path, sizeof(exe_path), "%s/cyd-emulator", EMU_BUILD_DIR);
+                char scale_str[8];
+                snprintf(scale_str, sizeof(scale_str), "%d", scale);
+                int nargs = 0;
+                char *new_argv[16];
+                new_argv[nargs++] = exe_path;
+                new_argv[nargs++] = "--scale";
+                new_argv[nargs++] = scale_str;
+                if (emu_turbo_mode)
+                    new_argv[nargs++] = "--turbo";
+                if (board_explicit) {
+                    new_argv[nargs++] = "--board";
+                    new_argv[nargs++] = (char *)active.model;
+                }
+                new_argv[nargs] = NULL;
+                printf("Relaunching: %s\n", exe_path);
+                execv(exe_path, new_argv);
+                perror("execv failed");
+            }
+            /* Build failed — restart current app */
+            pthread_join(build_thread, NULL);
+            build_result = -1;
+            printf("%s\n", build_status);
+            sdcard_init();
+            start_app_thread();
         }
 
         /* ---- Render ---- */
@@ -1304,24 +1582,52 @@ int main(int argc, char *argv[])
         }
         pthread_mutex_unlock(&emu_framebuf_mutex);
 
-        /* "No payload" overlay when app thread isn't running */
+        /* "No payload" or "building" overlay when app thread isn't running */
         if (!app_thread_valid) {
             /* Fill display with dark background */
             for (int i = 0; i < DISPLAY_WIDTH * DISPLAY_HEIGHT; i++)
                 disp_pixels[i] = 0xFF1A1A2E;
 
-            const char *line1 = "No payload loaded.";
-            const char *line2 = "File > Load Payload...";
-            int len1 = (int)strlen(line1);
-            int len2 = (int)strlen(line2);
-            int x1 = (DISPLAY_WIDTH - len1 * FONT_WIDTH) / 2;
-            int x2 = (DISPLAY_WIDTH - len2 * FONT_WIDTH) / 2;
-            int y1 = DISPLAY_HEIGHT / 2 - FONT_HEIGHT;
-            int y2 = DISPLAY_HEIGHT / 2 + FONT_HEIGHT / 2;
-            render_text(disp_pixels, DISPLAY_WIDTH, DISPLAY_HEIGHT,
-                        x1, y1, line1, 0xFFCCCCCC);
-            render_text(disp_pixels, DISPLAY_WIDTH, DISPLAY_HEIGHT,
-                        x2, y2, line2, 0xFF888888);
+            if (build_running || build_result >= 0) {
+                /* Show build progress */
+                render_text(disp_pixels, DISPLAY_WIDTH, DISPLAY_HEIGHT,
+                            8, 8, build_status, 0xFF00CCAA);
+                /* Build log lines */
+                for (int i = 0; i < BUILD_LOG_LINES; i++) {
+                    int idx = (build_log_head - BUILD_LOG_LINES + i + BUILD_LOG_LINES) % BUILD_LOG_LINES;
+                    if (build_log[idx][0]) {
+                        uint32_t color = 0xFF888888;
+                        if (strstr(build_log[idx], "error") || strstr(build_log[idx], "Error"))
+                            color = 0xFFCC4444;
+                        else if (strstr(build_log[idx], "warning") || strstr(build_log[idx], "Warning"))
+                            color = 0xFFCCCC00;
+                        else if (build_log[idx][0] == '[')
+                            color = 0xFFAAAAAA;
+                        render_text(disp_pixels, DISPLAY_WIDTH, DISPLAY_HEIGHT,
+                                    8, 28 + i * FONT_HEIGHT, build_log[idx], color);
+                    }
+                }
+            } else if (emu_flexe_active() || firmware_path) {
+                const char *line1 = "Firmware stopped.";
+                int len1 = (int)strlen(line1);
+                int x1 = (DISPLAY_WIDTH - len1 * FONT_WIDTH) / 2;
+                int y1 = DISPLAY_HEIGHT / 2 - FONT_HEIGHT / 2;
+                render_text(disp_pixels, DISPLAY_WIDTH, DISPLAY_HEIGHT,
+                            x1, y1, line1, 0xFFCCCCCC);
+            } else {
+                const char *line1 = "No payload loaded.";
+                const char *line2 = "File > Load Payload...";
+                int len1 = (int)strlen(line1);
+                int len2 = (int)strlen(line2);
+                int x1 = (DISPLAY_WIDTH - len1 * FONT_WIDTH) / 2;
+                int x2 = (DISPLAY_WIDTH - len2 * FONT_WIDTH) / 2;
+                int y1 = DISPLAY_HEIGHT / 2 - FONT_HEIGHT;
+                int y2 = DISPLAY_HEIGHT / 2 + FONT_HEIGHT / 2;
+                render_text(disp_pixels, DISPLAY_WIDTH, DISPLAY_HEIGHT,
+                            x1, y1, line1, 0xFFCCCCCC);
+                render_text(disp_pixels, DISPLAY_WIDTH, DISPLAY_HEIGHT,
+                            x2, y2, line2, 0xFF888888);
+            }
         }
 
         /* Render info panel */
