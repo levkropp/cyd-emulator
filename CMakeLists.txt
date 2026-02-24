@@ -99,6 +99,7 @@ set(EMU_SOURCES
     src/emu_system.c
     src/emu_gpio.c
     src/emu_flexe.c
+    src/emu_control.c
 )
 
 # Base sources (without LVGL) — used by non-LVGL demo targets
