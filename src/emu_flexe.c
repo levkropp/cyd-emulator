@@ -35,6 +35,7 @@ extern pthread_mutex_t emu_framebuf_mutex;
 
 /* From emu_sdcard.c or emu_main.c */
 extern const char *emu_sdcard_path;
+extern uint64_t emu_sdcard_size_bytes;
 
 /* From emu_main.c (log ring buffer) */
 extern char emu_log_ring[][48];
@@ -184,6 +185,8 @@ int emu_flexe_init(const char *bin_path, const char *elf_path)
     if (sstubs) {
         if (emu_sdcard_path)
             sdcard_stubs_set_image(sstubs, emu_sdcard_path);
+        if (emu_sdcard_size_bytes > 0)
+            sdcard_stubs_set_size(sstubs, emu_sdcard_size_bytes);
         if (syms)
             sdcard_stubs_hook_symbols(sstubs, syms);
     }
