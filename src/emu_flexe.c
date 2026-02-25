@@ -6,8 +6,6 @@
  * log ring buffer.
  */
 
-#ifdef EMU_USE_FLEXE
-
 #include "emu_flexe.h"
 #include "xtensa.h"
 #include "memory.h"
@@ -359,5 +357,3 @@ int emu_flexe_debug_wait_paused(int timeout_ms)
     pthread_mutex_unlock(&debug_mutex);
     return result;
 }
-
-#endif /* EMU_USE_FLEXE */

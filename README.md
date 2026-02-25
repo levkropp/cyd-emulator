@@ -2,93 +2,82 @@
 
 ![screenshot](screenshot.png)
 
-Desktop emulator for ESP32 CYD (Cheap Yellow Display) firmware. Runs your ESP32 app code natively on Linux using SDL2, with an emulated 320x240 ILI9341 display, resistive touchscreen, and SD card.
+Desktop emulator for ESP32 CYD (Cheap Yellow Display) firmware. Interprets genuine ESP32 .bin firmware binaries via the built-in **flexe** Xtensa LX6 emulator, with an emulated 320x240 ILI9341 display, resistive touchscreen, and SD card.
 
-## Quick start (standalone demo)
-
-No external firmware needed — just clone and build:
+## Quick start
 
 ```bash
 git clone https://github.com/nocomp/cyd-emulator.git
 cd cyd-emulator
-mkdir build && cd build
-cmake ..
-make -j$(nproc)
-./cyd-emulator
+cmake -S . -B build && cmake --build build
+./build/cyd-emulator --firmware /path/to/firmware.bin --elf /path/to/firmware.elf
 ```
 
-This builds and runs the FreeRTOS test suite demo by default (when no external firmware is found).
-
-### Built-in demos
-
-Three demo apps are included:
-
-| Demo | Directory | Description |
-|------|-----------|-------------|
-| **freertos** | `demos/freertos` | FreeRTOS primitives test suite (tasks, semaphores, queues, event groups, timers) |
-| **nolibrary** | `demos/nolibrary` | Interactive drawing pad using bare display/touch APIs |
-| **lvgl** | `demos/lvgl` | LVGL UI demo (buttons, slider, switch) — auto-fetches LVGL v9.2 |
-
-Select a demo with:
-
-```bash
-cmake -DAPP_SOURCE_DIR=demos/nolibrary ..
-cmake -DAPP_SOURCE_DIR=demos/freertos ..
-cmake -DAPP_SOURCE_DIR=demos/lvgl ..    # fetches LVGL automatically
-```
+The `--firmware` flag is required. The `--elf` flag is optional but enables symbol-based function hooking (ROM stubs, FreeRTOS, display/touch/SD drivers).
 
 ## What it does
 
-- Compiles your ESP32 firmware's C source files directly (no cross-compilation)
+- Interprets ESP32 firmware binaries through a cycle-level Xtensa LX6 emulator
 - Renders the ILI9341 display to an SDL2 window at 60 FPS
 - Emulates touch input via mouse clicks
-- Attaches FAT32 or exFAT SD card images via File menu
-- Provides ESP-IDF shim headers so `#include "esp_log.h"` etc. just work
-- FreeRTOS primitives: tasks, semaphores, queues, event groups, timers
-- LVGL v9 support: auto-fetched at build time, renders into emulator window
-- Info panel shows chip model, display resolution, touch events, and SD card status
+- Attaches FAT32 or exFAT SD card images via File menu or `--sdcard`
+- Hooks ESP-IDF runtime functions: FreeRTOS, NVS, esp_timer, GPIO, heap, logging
+- ROM function stubs: ets_printf, memcpy, memset, strlen, Cache ops, delay
+- Display/touch/SD card stubs render into the emulator window
+- Info panel shows chip model, display resolution, touch events, and UART log
 - Supports multiple CYD board profiles (`--board 2432S028R`, `--board 8048S070`, etc.)
+- Scriptable control interface via Unix domain socket (`--control`)
 
-## Building with your own firmware
+## Dependencies
 
-### Dependencies
-
-- SDL2 development libraries
+- SDL2 development libraries (`libsdl2-dev` or equivalent)
 - CMake 3.14+
-- The ESP32 firmware source (or use a built-in demo)
-- miniz (`libminiz-dev`, only needed when building with external firmware)
-- LVGL is fetched automatically when building the LVGL demo
+- C compiler (GCC or Clang)
 
-### Build
-
-Point at your firmware source directory:
+## Usage
 
 ```bash
-mkdir build && cd build
-cmake -DAPP_SOURCE_DIR=/path/to/your/esp32/main ..
-make -j$(nproc)
+./build/cyd-emulator --firmware app.bin                     # minimal
+./build/cyd-emulator --firmware app.bin --elf app.elf       # with symbol hooking
+./build/cyd-emulator --firmware app.bin --sdcard sd.img     # pre-attach SD card
+./build/cyd-emulator --firmware app.bin --board 8048S070    # 800x480 S3 board
+./build/cyd-emulator --firmware app.bin --turbo             # fast SD I/O
+./build/cyd-emulator --firmware app.bin --control /tmp/ctl  # scripted control
 ```
 
-If the emulator is checked out next to the `survival` project (`../survival/esp32/main`), it detects and uses those sources automatically. Otherwise, it falls back to the built-in FreeRTOS demo.
+### Options
 
-### Run
+| Flag | Description |
+|------|-------------|
+| `--firmware <file>` | ESP32 firmware binary (required) |
+| `--elf <file>` | ELF file for symbol hooking |
+| `--board <model>` | Board profile (default: 2432S028R) |
+| `--sdcard <file>` | SD card image path (default: sd.img) |
+| `--sdcard-size <size>` | SD card size, e.g. 4G |
+| `--scale <1-4>` | Display scale factor (default: 2) |
+| `--turbo` | Start in turbo mode |
+| `--control <path>` | Unix socket for scripted control |
+
+### Controls
+
+| Key | Action |
+|-----|--------|
+| Click on display | Tap touchscreen |
+| Tab | Toggle turbo mode |
+| R | Restart app |
+| Q / Ctrl+C | Quit |
+
+### Control socket
+
+When started with `--control <path>`, the emulator listens for single-line commands:
 
 ```bash
-./cyd-emulator                             # default board (2432S028R)
-./cyd-emulator --board 8048S070            # 800x480 S3 board
-./cyd-emulator --sdcard test/sdcard-fat32.img  # pre-attach SD card
-```
-
-## Writing your own app
-
-Create a directory with at minimum:
-
-- `main.c` — your firmware entry point (must define `void app_main(void)`)
-
-The emulator provides API headers for display, touch, SD card, and FreeRTOS in the `demos/common/` and `include/` directories. Your `app_main()` runs in a dedicated thread. Call `display_fill_rect()`, `touch_read()`, etc. exactly as you would on real hardware. Use `vTaskDelay()` for timing.
-
-```bash
-cmake -DAPP_SOURCE_DIR=/path/to/your/app ..
+echo "tap 160 120" | socat - UNIX:/tmp/ctl    # tap center of screen
+echo "screenshot /tmp/shot.bmp" | socat - UNIX:/tmp/ctl
+echo "status" | socat - UNIX:/tmp/ctl
+echo "pause" | socat - UNIX:/tmp/ctl           # debug: pause CPU
+echo "regs" | socat - UNIX:/tmp/ctl            # debug: dump registers
+echo "continue" | socat - UNIX:/tmp/ctl        # debug: resume
 ```
 
 ## Architecture
@@ -99,30 +88,33 @@ src/
   emu_display.c   Framebuffer: RGB565 pixel ops, shared via mutex
   emu_touch.c     Touch emulation: mouse events -> touch_read() API
   emu_sdcard.c    SD card: attach/detach disk images, block-level I/O
-  emu_payload.c   Payload stub: emulates firmware update flash region
-  emu_crc32.c     CRC32 shim: wraps miniz crc32
-  emu_json.c      Minimal JSON parser for board profile configs
+  emu_flexe.c     Bridge to flexe Xtensa interpreter
+  emu_crc32.c     CRC32 utility
+  emu_json.c      Save/load emulator state (JSON + SD image)
   emu_freertos.c  FreeRTOS emulation: tasks, semaphores, queues, timers
-  emu_lvgl.c      LVGL display/input drivers (flush to framebuf, touch input)
+  emu_control.c   Unix socket control interface + debug commands
+  font.c          Bitmap font data for panel rendering
 
-demos/
-  common/         Shared API headers (display.h, touch.h, etc.) and font data
-  nolibrary/      Drawing pad demo (no FreeRTOS beyond vTaskDelay)
-  freertos/       FreeRTOS test suite
-  lvgl/           LVGL UI demo (buttons, slider, switch)
+flexe/            Xtensa LX6 emulator (subproject)
+  src/xtensa.c    CPU core: decode, execute, windowed registers
+  src/memory.c    Memory subsystem: regions, IRAM/DRAM/flash
+  src/loader.c    ESP32 firmware binary loader
+  src/peripherals.c  ESP32 MMIO: UART, GPIO, DPORT, timers, etc.
+  src/rom_stubs.c    ROM function hooking via PC traps
+  src/elf_symbols.c  ELF symbol table loading
+  src/freertos_stubs.c  FreeRTOS runtime hooks
+  src/display_stubs.c   SPI display driver hooks
+  src/touch_stubs.c     Touch controller hooks
+  src/sdcard_stubs.c    SD/MMC driver hooks
 
-include/          ESP-IDF shim headers (esp_log.h, freertos/*.h, etc.)
+include/          ESP-IDF shim headers + shared API headers
 ```
 
 The emulator launches two threads:
 1. **Main thread** -- SDL init, window creation, event loop, menu rendering
-2. **App thread** -- calls `app_main()` from your firmware, exactly as ESP-IDF would
+2. **App thread** -- runs firmware via Xtensa interpreter
 
 The display framebuffer and touch state are shared between threads via mutexes.
-
-## How it works with your firmware
-
-Your firmware calls functions like `display_fill_rect()`, `touch_read()`, `sdcard_read_sector()`. On the real ESP32, these talk to SPI peripherals. In the emulator, shim implementations in `src/emu_*.c` redirect them to SDL2 and file I/O. Your app code is compiled verbatim -- no `#ifdef EMULATOR` needed.
 
 ## License
 

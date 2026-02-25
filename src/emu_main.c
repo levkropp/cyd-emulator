@@ -25,7 +25,6 @@
 #include "display.h"
 #include "font.h"
 #include "sdcard.h"
-#include "payload.h"
 #include "emu_board.h"
 #include "emu_json.h"
 #include "emu_flexe.h"
@@ -50,9 +49,6 @@ extern uint64_t emu_sdcard_size_bytes;
 extern int emu_sdcard_enabled;
 extern int emu_turbo_mode;
 
-/* From emu_payload.c */
-extern const char *emu_payload_path;
-
 /* From esp_log.h (ring buffer) */
 extern char emu_log_ring[][48];
 extern int  emu_log_head;
@@ -61,9 +57,6 @@ extern int  emu_log_head;
 /* From esp_chip_info.h */
 int emu_chip_model = 1;  /* CHIP_ESP32 */
 int emu_chip_cores = 2;
-
-/* From main.c (app firmware) — only needed when not running flexe */
-extern void app_main(void);
 
 /* Flexe firmware paths */
 static const char *firmware_path = NULL;
@@ -116,11 +109,9 @@ static int disp_w, disp_h, win_w, win_h;
 
 /* ---- Mutable board profile ---- */
 static struct board_profile active;
-static int board_explicit = 0;
 
 /* ---- Path buffers for dynamically loaded paths ---- */
 static char sdcard_path_buf[512];
-static char payload_path_buf[512];
 
 /* ---- App thread ---- */
 static pthread_t app_thread;
@@ -131,15 +122,6 @@ static int emu_window_running = 1;  /* main event loop flag */
 enum { MENU_CLOSED = 0, MENU_FILE, MENU_VIEW, MENU_HELP };
 static int menu_open = MENU_CLOSED;
 static int menu_hover = -1;
-
-/* ---- Build thread state (for Open Project) ---- */
-#define BUILD_LOG_LINES 12
-#define BUILD_LOG_COLS  48
-static char build_log[BUILD_LOG_LINES][BUILD_LOG_COLS];
-static int  build_log_head = 0;
-static char build_status[64] = "";
-static volatile int build_running = 0;
-static volatile int build_result = -1;  /* -1=idle, 0=success, 1=cmake fail, 2=make fail */
 
 /* Menu header pixel positions */
 #define MENU_HDR_H   MENU_BAR_HEIGHT
@@ -155,7 +137,7 @@ static const struct { const char *label; int x, w; } menu_hdrs[] = {
 #define DROP_W        (DROP_CHARS * FONT_WIDTH)   /* 192px */
 #define DROP_ITEM_H   FONT_HEIGHT                 /* 16px per item */
 
-#define FILE_ITEMS    8
+#define FILE_ITEMS    6
 #define VIEW_ITEMS    5
 #define HELP_ITEMS    2
 
@@ -277,8 +259,7 @@ static void render_panel(uint32_t *buf, int pw, int ph)
     panel_line(buf, pw, ph, row++, PANEL_FG, "  SD:    %d slot%s",
                b->sd_slots, b->sd_slots != 1 ? "s" : "");
     panel_line(buf, pw, ph, row++, PANEL_FG, "  USB:   %s", b->usb_type);
-    panel_line(buf, pw, ph, row++, PANEL_FG, "  Mode:  %s",
-               emu_flexe_active() ? "flexe" : "native");
+    panel_line(buf, pw, ph, row++, PANEL_FG, "  Mode:  flexe");
     row++;
 
     panel_line(buf, pw, ph, row++, PANEL_HEAD, " Touch Events");
@@ -368,21 +349,16 @@ static int dropdown_item_count(void)
 
 static int dropdown_is_separator(int item)
 {
-    return (menu_open == MENU_FILE && item == 5);
+    return (menu_open == MENU_FILE && item == 3);
 }
 
 static int dropdown_is_disabled(int item)
 {
     if (menu_open == MENU_FILE) {
-        /* Disable most items while building */
-        if (build_running && item != 7) return 1;  /* only Quit stays enabled */
         switch (item) {
-#ifdef EMU_STANDALONE
-        case 1: return 1;  /* Load Payload — standalone doesn't use payloads */
-#endif
-        case 2: return !app_thread_valid;  /* Attach SD Image */
-        case 3: return !app_thread_valid;  /* Save State */
-        case 6: return !app_thread_valid;  /* Restart App */
+        case 0: return !app_thread_valid;  /* Attach SD Image */
+        case 1: return !app_thread_valid;  /* Save State */
+        case 4: return !app_thread_valid;  /* Restart App */
         }
     }
     return 0;
@@ -394,14 +370,12 @@ static void dropdown_item_label(int item, char *buf, int bufsize)
     switch (menu_open) {
     case MENU_FILE:
         switch (item) {
-        case 0: snprintf(buf, bufsize, " Open Project..."); break;
-        case 1: snprintf(buf, bufsize, " Load Payload..."); break;
-        case 2: snprintf(buf, bufsize, " Attach SD Image..."); break;
-        case 3: snprintf(buf, bufsize, " Save State..."); break;
-        case 4: snprintf(buf, bufsize, " Load State..."); break;
-        case 5: break; /* separator */
-        case 6: snprintf(buf, bufsize, " Restart App      R"); break;
-        case 7: snprintf(buf, bufsize, " Quit             Q"); break;
+        case 0: snprintf(buf, bufsize, " Attach SD Image..."); break;
+        case 1: snprintf(buf, bufsize, " Save State..."); break;
+        case 2: snprintf(buf, bufsize, " Load State..."); break;
+        case 3: break; /* separator */
+        case 4: snprintf(buf, bufsize, " Restart App      R"); break;
+        case 5: snprintf(buf, bufsize, " Quit             Q"); break;
         }
         break;
     case MENU_VIEW:
@@ -559,45 +533,12 @@ static char *zenity_save(const char *title, const char *filter)
     return result;
 }
 
-/* Returns malloc'd path or NULL. Caller must free(). */
-static char *zenity_open_dir(const char *title)
-{
-    if (!zenity_available()) {
-        printf("zenity not available\n");
-        return NULL;
-    }
-
-    char cmd[512];
-    snprintf(cmd, sizeof(cmd),
-             "zenity --file-selection --directory --title='%s' 2>/dev/null",
-             title);
-
-    FILE *f = popen(cmd, "r");
-    if (!f) return NULL;
-
-    char buf[1024];
-    char *result = NULL;
-    if (fgets(buf, sizeof(buf), f)) {
-        size_t len = strlen(buf);
-        while (len > 0 && (buf[len-1] == '\n' || buf[len-1] == '\r'))
-            buf[--len] = '\0';
-        if (len > 0)
-            result = strdup(buf);
-    }
-    pclose(f);
-    return result;
-}
-
 /* ---- App thread management ---- */
 
 static void *app_thread_func(void *arg)
 {
     (void)arg;
-    if (emu_flexe_active()) {
-        emu_flexe_run();
-    } else {
-        app_main();
-    }
+    emu_flexe_run();
     emu_app_running = 0;
     return NULL;
 }
@@ -644,66 +585,6 @@ static void apply_board(const struct board_profile *b)
         snprintf(title, sizeof(title), "CYD Emulator - %s", active.model);
         SDL_SetWindowTitle(s_window, title);
     }
-}
-
-/* ---- Board selection dialog ---- */
-
-/* Show zenity radiolist of board profiles. Returns 0 on selection, -1 on cancel. */
-static int show_board_dialog(void)
-{
-    if (!zenity_available()) {
-        printf("zenity not available, using default board\n");
-        return 0;
-    }
-
-    /* Build zenity command dynamically from board_profiles[] */
-    char cmd[4096];
-    int pos = snprintf(cmd, sizeof(cmd),
-        "zenity --list --radiolist "
-        "--title='Select CYD Board' "
-        "--text='Which board is this payload for?' "
-        "--column='' --column='Model' --column='Chip' --column='Display' --column='Touch' "
-        "--width=600 --height=500 --print-column=2 ");
-
-    for (int i = 0; i < BOARD_COUNT && pos < (int)sizeof(cmd) - 200; i++) {
-        const struct board_profile *b = &board_profiles[i];
-        char disp_info[32];
-        snprintf(disp_info, sizeof(disp_info), "%s %dx%d",
-                 b->display_size, b->display_width, b->display_height);
-
-        pos += snprintf(cmd + pos, sizeof(cmd) - pos,
-            "%s '%s' '%s' '%s' '%s' ",
-            (strcasecmp(b->model, active.model) == 0) ? "TRUE" : "FALSE",
-            b->model, b->chip_name, disp_info, b->touch_type);
-    }
-    /* Redirect stderr to /dev/null */
-    snprintf(cmd + pos, sizeof(cmd) - pos, "2>/dev/null");
-
-    FILE *f = popen(cmd, "r");
-    if (!f) return -1;
-
-    char buf[64];
-    char *result = NULL;
-    if (fgets(buf, sizeof(buf), f)) {
-        size_t len = strlen(buf);
-        while (len > 0 && (buf[len-1] == '\n' || buf[len-1] == '\r'))
-            buf[--len] = '\0';
-        if (len > 0)
-            result = buf;
-    }
-    int status = pclose(f);
-
-    if (!result || status != 0)
-        return -1;
-
-    const struct board_profile *b = board_find(result);
-    if (!b) {
-        fprintf(stderr, "Unknown board from dialog: %s\n", result);
-        return -1;
-    }
-
-    apply_board(b);
-    return 0;
 }
 
 /* ---- Window resize (scale change) ---- */
@@ -771,7 +652,8 @@ static void do_save_state(void)
         .board = &active,
         .scale = scale,
         .turbo = emu_turbo_mode,
-        .payload_path = emu_payload_path,
+        .firmware_path = firmware_path,
+        .elf_path = elf_path,
         .sdcard_size_bytes = emu_sdcard_size_bytes,
     };
 
@@ -822,12 +704,11 @@ static void do_load_state(void)
     sdcard_path_buf[sizeof(sdcard_path_buf) - 1] = '\0';
     emu_sdcard_path = sdcard_path_buf;
 
-    /* Apply payload path if provided */
-    if (state.payload_path && state.payload_path[0]) {
-        strncpy(payload_path_buf, state.payload_path, sizeof(payload_path_buf) - 1);
-        payload_path_buf[sizeof(payload_path_buf) - 1] = '\0';
-        emu_payload_path = payload_path_buf;
-    }
+    /* Apply firmware paths if provided */
+    if (state.firmware_path && state.firmware_path[0])
+        firmware_path = state.firmware_path;
+    if (state.elf_path && state.elf_path[0])
+        elf_path = state.elf_path;
 
     if (state.sdcard_size_bytes > 0)
         emu_sdcard_size_bytes = state.sdcard_size_bytes;
@@ -839,7 +720,7 @@ static void do_load_state(void)
     free(json_path);
 
     /* Reinitialize and restart */
-    payload_init();
+    emu_flexe_init(firmware_path, elf_path);
     sdcard_init();
     start_app_thread();
 }
@@ -869,154 +750,12 @@ static void do_attach_sd(void)
     start_app_thread();
 }
 
-static void do_load_payload(void)
-{
-    char *path = zenity_open("Load Payload", "Payload files | *.bin");
-    if (!path) return;
-
-    stop_app_thread();
-    sdcard_deinit();
-
-    strncpy(payload_path_buf, path, sizeof(payload_path_buf) - 1);
-    payload_path_buf[sizeof(payload_path_buf) - 1] = '\0';
-    emu_payload_path = payload_path_buf;
-    free(path);
-
-    payload_init();
-
-    /* Show board selection unless --board was explicit */
-    if (!board_explicit) {
-        if (show_board_dialog() < 0) {
-            /* User cancelled — stay in "no payload" state */
-            emu_payload_path = NULL;
-            return;
-        }
-    }
-
-    sdcard_init();
-    start_app_thread();
-}
-
-/* ---- Open Project (rebuild + relaunch) ---- */
-
-/* Saved argv from main() for re-exec */
-static int    saved_argc;
-static char **saved_argv;
-
-static pthread_t build_thread;
-static char build_project_dir[1024];
-
-static void build_log_append(const char *line)
-{
-    strncpy(build_log[build_log_head], line, BUILD_LOG_COLS - 1);
-    build_log[build_log_head][BUILD_LOG_COLS - 1] = '\0';
-    build_log_head = (build_log_head + 1) % BUILD_LOG_LINES;
-}
-
-static int run_cmd_with_log(const char *cmd, const char *phase)
-{
-    snprintf(build_status, sizeof(build_status), "%s", phase);
-    printf("Running: %s\n", cmd);
-
-    FILE *f = popen(cmd, "r");
-    if (!f) return -1;
-
-    char buf[256];
-    while (fgets(buf, sizeof(buf), f)) {
-        /* Strip trailing newline */
-        size_t len = strlen(buf);
-        while (len > 0 && (buf[len-1] == '\n' || buf[len-1] == '\r'))
-            buf[--len] = '\0';
-        if (len > 0) {
-            build_log_append(buf);
-            printf("  %s\n", buf);
-        }
-    }
-    return pclose(f);
-}
-
-static void *build_thread_func(void *arg)
-{
-    (void)arg;
-    char cmd[2048];
-
-#if defined(EMU_SOURCE_DIR) && defined(EMU_BUILD_DIR)
-    /* cmake reconfigure */
-    snprintf(cmd, sizeof(cmd),
-             "cmake -S \"%s\" -B \"%s\" -DAPP_SOURCE_DIR=\"%s\" 2>&1",
-             EMU_SOURCE_DIR, EMU_BUILD_DIR, build_project_dir);
-    int ret = run_cmd_with_log(cmd, "Configuring...");
-    if (ret != 0) {
-        snprintf(build_status, sizeof(build_status), "cmake failed (exit %d)", ret);
-        build_result = 1;
-        build_running = 0;
-        return NULL;
-    }
-
-    /* make */
-    snprintf(cmd, sizeof(cmd),
-             "make -C \"%s\" -j$(nproc) 2>&1", EMU_BUILD_DIR);
-    ret = run_cmd_with_log(cmd, "Building...");
-    if (ret != 0) {
-        snprintf(build_status, sizeof(build_status), "make failed (exit %d)", ret);
-        build_result = 2;
-        build_running = 0;
-        return NULL;
-    }
-
-    snprintf(build_status, sizeof(build_status), "Build complete, relaunching...");
-    build_result = 0;
-#endif
-    build_running = 0;
-    return NULL;
-}
-
-static void do_open_project(void)
-{
-#if !defined(EMU_SOURCE_DIR) || !defined(EMU_BUILD_DIR)
-    printf("Open Project not available (EMU_SOURCE_DIR/EMU_BUILD_DIR not set)\n");
-    return;
-#else
-    if (build_running) return;
-
-    char *dir = zenity_open_dir("Select ESP32 project folder (must contain main.c)");
-    if (!dir) return;
-
-    /* Validate main.c exists */
-    char mainc[1024];
-    snprintf(mainc, sizeof(mainc), "%s/main.c", dir);
-    if (access(mainc, F_OK) != 0) {
-        printf("Error: %s does not contain main.c\n", dir);
-        free(dir);
-        return;
-    }
-
-    stop_app_thread();
-    sdcard_deinit();
-
-    /* Clear build log */
-    for (int i = 0; i < BUILD_LOG_LINES; i++)
-        build_log[i][0] = '\0';
-    build_log_head = 0;
-    build_status[0] = '\0';
-
-    strncpy(build_project_dir, dir, sizeof(build_project_dir) - 1);
-    build_project_dir[sizeof(build_project_dir) - 1] = '\0';
-    free(dir);
-
-    build_running = 1;
-    build_result = -1;
-    pthread_create(&build_thread, NULL, build_thread_func, NULL);
-    /* Build thread runs; main loop renders progress. Completion handled in event loop. */
-#endif
-}
-
 static void do_restart_app(void)
 {
     if (!app_thread_valid) return;
     stop_app_thread();
     sdcard_deinit();
-    payload_init();
+    emu_flexe_init(firmware_path, elf_path);
     sdcard_init();
     start_app_thread();
     printf("App restarted.\n");
@@ -1029,13 +768,11 @@ static void dropdown_execute(int item)
     switch (menu_open) {
     case MENU_FILE:
         switch (item) {
-        case 0: do_open_project(); break;
-        case 1: do_load_payload(); break;
-        case 2: do_attach_sd(); break;
-        case 3: do_save_state(); break;
-        case 4: do_load_state(); break;
-        case 6: do_restart_app(); break;
-        case 7: emu_window_running = 0; emu_app_running = 0; break;  /* Quit */
+        case 0: do_attach_sd(); break;
+        case 1: do_save_state(); break;
+        case 2: do_load_state(); break;
+        case 4: do_restart_app(); break;
+        case 5: emu_window_running = 0; emu_app_running = 0; break;  /* Quit */
         }
         break;
     case MENU_VIEW:
@@ -1055,7 +792,7 @@ static void dropdown_execute(int item)
                    "  Tab                Toggle turbo mode\n"
                    "  R                  Restart app\n"
                    "  Q / Ctrl+C         Quit\n"
-                   "  File menu          Load payload, save/load state\n"
+                   "  File menu          SD image, save/load state\n"
                    "  View menu          Turbo mode, display scale\n\n");
             break;
         case 1:
@@ -1173,13 +910,10 @@ static uint64_t parse_size(const char *s)
 static void usage(const char *prog)
 {
     fprintf(stderr,
-        "Usage: %s [options]\n"
+        "Usage: %s --firmware <file.bin> [options]\n"
         "\n"
-        "Payload:\n"
-        "  --payload <file>        Path to payload.bin (or use File > Load Payload)\n"
-        "\n"
-        "Firmware (flexe Xtensa interpreter):\n"
-        "  --firmware <file.bin>   Run ESP32 firmware binary via Xtensa emulator\n"
+        "Firmware:\n"
+        "  --firmware <file.bin>   ESP32 firmware binary (required)\n"
         "  --elf <file.elf>        ELF file for symbol hooking (optional)\n"
         "\n"
         "Board selection:\n"
@@ -1223,9 +957,6 @@ int main(int argc, char *argv[])
     setvbuf(stdout, NULL, _IOLBF, 0);
     setvbuf(stderr, NULL, _IOLBF, 0);
 
-    saved_argc = argc;
-    saved_argv = argv;
-
     signal(SIGTERM, signal_handler);
     signal(SIGINT, signal_handler);
 
@@ -1238,11 +969,8 @@ int main(int argc, char *argv[])
     int sdcard_slots_override = -1;
 
     for (int i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "--payload") == 0 && i + 1 < argc) {
-            emu_payload_path = argv[++i];
-        } else if (strcmp(argv[i], "--board") == 0 && i + 1 < argc) {
+        if (strcmp(argv[i], "--board") == 0 && i + 1 < argc) {
             board_name = argv[++i];
-            board_explicit = 1;
             if (strcmp(board_name, "list") == 0 || strcmp(board_name, "help") == 0) {
                 board_list();
                 return 0;
@@ -1335,12 +1063,15 @@ int main(int argc, char *argv[])
     emu_chip_cores = active.cores;
     emu_sdcard_enabled = (active.sd_slots > 0) ? 1 : 0;
 
-    /* Initialize flexe if firmware path given */
-    if (firmware_path) {
-        if (emu_flexe_init(firmware_path, elf_path) != 0) {
-            fprintf(stderr, "Failed to load firmware: %s\n", firmware_path);
-            return 1;
-        }
+    /* Firmware is required */
+    if (!firmware_path) {
+        fprintf(stderr, "Error: --firmware is required.\n\n");
+        usage(argv[0]);
+        return 1;
+    }
+    if (emu_flexe_init(firmware_path, elf_path) != 0) {
+        fprintf(stderr, "Failed to load firmware: %s\n", firmware_path);
+        return 1;
     }
 
     printf("\n");
@@ -1351,14 +1082,9 @@ int main(int argc, char *argv[])
     printf("  Touch:   %s\n", active.touch_type);
     printf("  SD:      %d slot(s)\n", active.sd_slots);
     printf("  USB:     %s\n", active.usb_type);
-    if (emu_flexe_active()) {
-        printf("  Mode:    flexe (Xtensa LX6 interpreter)\n");
-        printf("  Firmware: %s\n", firmware_path);
-        if (elf_path) printf("  ELF:     %s\n", elf_path);
-    } else {
-        printf("  Mode:    native\n");
-        printf("  Payload: %s\n", emu_payload_path ? emu_payload_path : "(none)");
-    }
+    printf("  Mode:    flexe (Xtensa LX6 interpreter)\n");
+    printf("  Firmware: %s\n", firmware_path);
+    if (elf_path) printf("  ELF:     %s\n", elf_path);
     printf("  Speed:   %s\n", emu_turbo_mode ? "turbo" : "normal (hardware-accurate)");
     if (control_path)
         printf("  Control: %s\n", control_path);
@@ -1434,37 +1160,12 @@ int main(int argc, char *argv[])
             fprintf(stderr, "Warning: failed to create control socket %s\n", control_path);
     }
 
-    /* Start the app thread */
-    if (emu_flexe_active()) {
-        /* Flexe mode: firmware already loaded, start interpreter thread */
-        if (start_app_thread() != 0) {
-            emu_flexe_shutdown();
-            SDL_Quit();
-            return 1;
-        }
-    } else if (emu_payload_path) {
-        if (!board_explicit) {
-            /* Show board dialog; if cancelled, enter waiting state */
-            if (show_board_dialog() < 0) {
-                emu_payload_path = NULL;
-            }
-        }
-        if (emu_payload_path) {
-            if (start_app_thread() != 0) {
-                SDL_Quit();
-                return 1;
-            }
-        }
+    /* Start the app thread (firmware already loaded) */
+    if (start_app_thread() != 0) {
+        emu_flexe_shutdown();
+        SDL_Quit();
+        return 1;
     }
-#ifdef EMU_STANDALONE
-    else {
-        /* Standalone mode: start app thread immediately (no payload required) */
-        if (start_app_thread() != 0) {
-            SDL_Quit();
-            return 1;
-        }
-    }
-#endif
 
     /* Pixel buffers */
     uint32_t disp_pixels[DISPLAY_WIDTH * DISPLAY_HEIGHT];
@@ -1557,39 +1258,6 @@ int main(int argc, char *argv[])
             }
         }
 
-        /* ---- Check build completion ---- */
-        if (!build_running && build_result >= 0) {
-            if (build_result == 0) {
-                /* Build succeeded — relaunch */
-                pthread_join(build_thread, NULL);
-                char exe_path[1024];
-                snprintf(exe_path, sizeof(exe_path), "%s/cyd-emulator", EMU_BUILD_DIR);
-                char scale_str[8];
-                snprintf(scale_str, sizeof(scale_str), "%d", scale);
-                int nargs = 0;
-                char *new_argv[16];
-                new_argv[nargs++] = exe_path;
-                new_argv[nargs++] = "--scale";
-                new_argv[nargs++] = scale_str;
-                if (emu_turbo_mode)
-                    new_argv[nargs++] = "--turbo";
-                if (board_explicit) {
-                    new_argv[nargs++] = "--board";
-                    new_argv[nargs++] = (char *)active.model;
-                }
-                new_argv[nargs] = NULL;
-                printf("Relaunching: %s\n", exe_path);
-                execv(exe_path, new_argv);
-                perror("execv failed");
-            }
-            /* Build failed — restart current app */
-            pthread_join(build_thread, NULL);
-            build_result = -1;
-            printf("%s\n", build_status);
-            sdcard_init();
-            start_app_thread();
-        }
-
         /* ---- Render ---- */
 
         /* Convert RGB565 framebuffer to ARGB8888 */
@@ -1603,52 +1271,18 @@ int main(int argc, char *argv[])
         }
         pthread_mutex_unlock(&emu_framebuf_mutex);
 
-        /* "No payload" or "building" overlay when app thread isn't running */
+        /* "Firmware stopped" overlay when app thread isn't running */
         if (!app_thread_valid) {
             /* Fill display with dark background */
             for (int i = 0; i < DISPLAY_WIDTH * DISPLAY_HEIGHT; i++)
                 disp_pixels[i] = 0xFF1A1A2E;
 
-            if (build_running || build_result >= 0) {
-                /* Show build progress */
-                render_text(disp_pixels, DISPLAY_WIDTH, DISPLAY_HEIGHT,
-                            8, 8, build_status, 0xFF00CCAA);
-                /* Build log lines */
-                for (int i = 0; i < BUILD_LOG_LINES; i++) {
-                    int idx = (build_log_head - BUILD_LOG_LINES + i + BUILD_LOG_LINES) % BUILD_LOG_LINES;
-                    if (build_log[idx][0]) {
-                        uint32_t color = 0xFF888888;
-                        if (strstr(build_log[idx], "error") || strstr(build_log[idx], "Error"))
-                            color = 0xFFCC4444;
-                        else if (strstr(build_log[idx], "warning") || strstr(build_log[idx], "Warning"))
-                            color = 0xFFCCCC00;
-                        else if (build_log[idx][0] == '[')
-                            color = 0xFFAAAAAA;
-                        render_text(disp_pixels, DISPLAY_WIDTH, DISPLAY_HEIGHT,
-                                    8, 28 + i * FONT_HEIGHT, build_log[idx], color);
-                    }
-                }
-            } else if (emu_flexe_active() || firmware_path) {
-                const char *line1 = "Firmware stopped.";
-                int len1 = (int)strlen(line1);
-                int x1 = (DISPLAY_WIDTH - len1 * FONT_WIDTH) / 2;
-                int y1 = DISPLAY_HEIGHT / 2 - FONT_HEIGHT / 2;
-                render_text(disp_pixels, DISPLAY_WIDTH, DISPLAY_HEIGHT,
-                            x1, y1, line1, 0xFFCCCCCC);
-            } else {
-                const char *line1 = "No payload loaded.";
-                const char *line2 = "File > Load Payload...";
-                int len1 = (int)strlen(line1);
-                int len2 = (int)strlen(line2);
-                int x1 = (DISPLAY_WIDTH - len1 * FONT_WIDTH) / 2;
-                int x2 = (DISPLAY_WIDTH - len2 * FONT_WIDTH) / 2;
-                int y1 = DISPLAY_HEIGHT / 2 - FONT_HEIGHT;
-                int y2 = DISPLAY_HEIGHT / 2 + FONT_HEIGHT / 2;
-                render_text(disp_pixels, DISPLAY_WIDTH, DISPLAY_HEIGHT,
-                            x1, y1, line1, 0xFFCCCCCC);
-                render_text(disp_pixels, DISPLAY_WIDTH, DISPLAY_HEIGHT,
-                            x2, y2, line2, 0xFF888888);
-            }
+            const char *line1 = "Firmware stopped.";
+            int len1 = (int)strlen(line1);
+            int x1 = (DISPLAY_WIDTH - len1 * FONT_WIDTH) / 2;
+            int y1 = DISPLAY_HEIGHT / 2 - FONT_HEIGHT / 2;
+            render_text(disp_pixels, DISPLAY_WIDTH, DISPLAY_HEIGHT,
+                        x1, y1, line1, 0xFFCCCCCC);
         }
 
         /* Render info panel */

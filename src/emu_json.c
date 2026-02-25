@@ -58,7 +58,8 @@ int emu_json_save_state(const char *base_path, const struct emu_state *state,
     fprintf(f, "  \"emulation\": {\n");
     fprintf(f, "    \"scale\": %d,\n", state->scale);
     fprintf(f, "    \"turbo\": %s,\n", state->turbo ? "true" : "false");
-    fprintf(f, "    \"payload_path\": \"%s\",\n", state->payload_path ? state->payload_path : "");
+    fprintf(f, "    \"firmware_path\": \"%s\",\n", state->firmware_path ? state->firmware_path : "");
+    fprintf(f, "    \"elf_path\": \"%s\",\n", state->elf_path ? state->elf_path : "");
     fprintf(f, "    \"sdcard_size_bytes\": %llu\n", (unsigned long long)state->sdcard_size_bytes);
     fprintf(f, "  }\n");
     fprintf(f, "}\n");
@@ -134,7 +135,8 @@ static char s_chip_name[32];
 static char s_display_size[16];
 static char s_touch_type[64];
 static char s_usb_type[64];
-static char s_payload_path[512];
+static char s_firmware_path[512];
+static char s_elf_path[512];
 
 int emu_json_load_state(const char *json_path, struct emu_state *state,
                         struct board_profile *board_out)
@@ -200,9 +202,12 @@ int emu_json_load_state(const char *json_path, struct emu_state *state,
                 } else if (strcmp(key, "usb_type") == 0) {
                     strncpy(s_usb_type, strval, sizeof(s_usb_type) - 1);
                     board_out->usb_type = s_usb_type;
-                } else if (strcmp(key, "payload_path") == 0) {
-                    strncpy(s_payload_path, strval, sizeof(s_payload_path) - 1);
-                    state->payload_path = s_payload_path;
+                } else if (strcmp(key, "firmware_path") == 0) {
+                    strncpy(s_firmware_path, strval, sizeof(s_firmware_path) - 1);
+                    state->firmware_path = s_firmware_path;
+                } else if (strcmp(key, "elf_path") == 0) {
+                    strncpy(s_elf_path, strval, sizeof(s_elf_path) - 1);
+                    state->elf_path = s_elf_path;
                 }
             } else if (*p == 't' || *p == 'f') {
                 p = read_bool(p, &boolval);
