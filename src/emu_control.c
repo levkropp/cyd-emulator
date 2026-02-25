@@ -19,6 +19,11 @@
 #include "emu_flexe.h"
 #include "emu_board.h"
 
+#ifdef EMU_USE_FLEXE
+#include "xtensa.h"
+#include "memory.h"
+#endif
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -258,6 +263,268 @@ static void handle_quit(int fd)
     SDL_PushEvent(&ev);
 }
 
+/* ---- Debug command handlers (flexe only) ---- */
+
+#ifdef EMU_USE_FLEXE
+
+static void handle_break(int fd, const char *args)
+{
+    if (!emu_flexe_active()) {
+        send_str(fd, "ERR flexe not active\n");
+        return;
+    }
+    uint32_t addr = (uint32_t)strtoul(args, NULL, 0);
+    xtensa_cpu_t *cpu = emu_flexe_get_cpu();
+    if (xtensa_set_breakpoint(cpu, addr) == 0) {
+        char resp[64];
+        snprintf(resp, sizeof(resp), "OK breakpoint set at 0x%08X\n", addr);
+        send_str(fd, resp);
+    } else {
+        send_str(fd, "ERR too many breakpoints\n");
+    }
+}
+
+static void handle_clearbreak(int fd, const char *args)
+{
+    if (!emu_flexe_active()) {
+        send_str(fd, "ERR flexe not active\n");
+        return;
+    }
+    xtensa_cpu_t *cpu = emu_flexe_get_cpu();
+    while (*args == ' ') args++;
+    if (strcmp(args, "all") == 0) {
+        for (int i = 0; i < 16; i++)
+            cpu->breakpoints[i] = 0;
+        cpu->breakpoint_count = 0;
+        send_str(fd, "OK all breakpoints cleared\n");
+    } else {
+        uint32_t addr = (uint32_t)strtoul(args, NULL, 0);
+        xtensa_clear_breakpoint(cpu, addr);
+        char resp[64];
+        snprintf(resp, sizeof(resp), "OK cleared breakpoint at 0x%08X\n", addr);
+        send_str(fd, resp);
+    }
+}
+
+static void handle_pause(int fd)
+{
+    if (!emu_flexe_active()) {
+        send_str(fd, "ERR flexe not active\n");
+        return;
+    }
+    if (emu_flexe_debug_paused()) {
+        xtensa_cpu_t *cpu = emu_flexe_get_cpu();
+        char resp[64];
+        snprintf(resp, sizeof(resp), "OK already paused at 0x%08X\n", cpu->pc);
+        send_str(fd, resp);
+        return;
+    }
+    emu_flexe_debug_break();
+    if (emu_flexe_debug_wait_paused(2000)) {
+        xtensa_cpu_t *cpu = emu_flexe_get_cpu();
+        char resp[64];
+        snprintf(resp, sizeof(resp), "OK paused at 0x%08X\n", cpu->pc);
+        send_str(fd, resp);
+    } else {
+        send_str(fd, "ERR timeout waiting for pause\n");
+    }
+}
+
+static void handle_continue(int fd)
+{
+    if (!emu_flexe_active()) {
+        send_str(fd, "ERR flexe not active\n");
+        return;
+    }
+    if (!emu_flexe_debug_paused()) {
+        send_str(fd, "OK not paused\n");
+        return;
+    }
+    emu_flexe_debug_continue();
+    send_str(fd, "OK\n");
+}
+
+static void handle_step(int fd, const char *args)
+{
+    if (!emu_flexe_active()) {
+        send_str(fd, "ERR flexe not active\n");
+        return;
+    }
+    /* Must be paused to step */
+    if (!emu_flexe_debug_paused()) {
+        emu_flexe_debug_break();
+        if (!emu_flexe_debug_wait_paused(2000)) {
+            send_str(fd, "ERR timeout waiting for pause\n");
+            return;
+        }
+    }
+
+    int count = 1;
+    if (args && *args)
+        count = atoi(args);
+    if (count < 1) count = 1;
+    if (count > 100000) count = 100000;
+
+    xtensa_cpu_t *cpu = emu_flexe_get_cpu();
+    char line[256];
+
+    /* Ensure CPU can execute steps even if it was stopped/halted */
+    int was_stopped = !cpu->running;
+    int was_halted = cpu->halted;
+    if (was_stopped) cpu->running = true;
+    if (was_halted) cpu->halted = false;
+
+    for (int i = 0; i < count; i++) {
+        /* Save registers before step */
+        uint32_t old_regs[16];
+        for (int r = 0; r < 16; r++)
+            old_regs[r] = ar_read(cpu, r);
+        uint32_t old_pc = cpu->pc;
+
+        /* Disassemble current instruction */
+        char dis[128];
+        xtensa_disasm(cpu, old_pc, dis, sizeof(dis));
+
+        /* Step — temporarily suppress breakpoints so we can step past them */
+        int saved_bp_count = cpu->breakpoint_count;
+        cpu->breakpoint_count = 0;
+        cpu->breakpoint_hit = false;
+        xtensa_step(cpu);
+        cpu->breakpoint_count = saved_bp_count;
+
+        /* Build step line */
+        int pos = snprintf(line, sizeof(line), "STEP 0x%08X %s", old_pc, dis);
+
+        /* Report changed registers */
+        int first_change = 1;
+        for (int r = 0; r < 16; r++) {
+            uint32_t new_val = ar_read(cpu, r);
+            if (new_val != old_regs[r]) {
+                pos += snprintf(line + pos, sizeof(line) - pos,
+                               "%s a%d=%08X",
+                               first_change ? " |" : "", r, new_val);
+                first_change = 0;
+            }
+        }
+        pos += snprintf(line + pos, sizeof(line) - pos, "\n");
+        send_str(fd, line);
+
+        if (!cpu->running) break;
+    }
+    snprintf(line, sizeof(line), "OK pc=0x%08X\n", cpu->pc);
+    send_str(fd, line);
+}
+
+static void handle_regs(int fd)
+{
+    if (!emu_flexe_active()) {
+        send_str(fd, "ERR flexe not active\n");
+        return;
+    }
+    if (!emu_flexe_debug_paused()) {
+        send_str(fd, "ERR not paused\n");
+        return;
+    }
+
+    xtensa_cpu_t *cpu = emu_flexe_get_cpu();
+    char line[256];
+
+    snprintf(line, sizeof(line), "REG PC=0x%08X\n", cpu->pc);
+    send_str(fd, line);
+
+    uint32_t ps = cpu->ps;
+    snprintf(line, sizeof(line),
+             "REG PS=0x%08X INTLEVEL=%u EXCM=%u UM=%u RING=%u OWB=%u CALLINC=%u WOE=%u\n",
+             ps, ps & 0xF, (ps >> 4) & 1, (ps >> 5) & 1, (ps >> 6) & 3,
+             (ps >> 8) & 0xF, (ps >> 16) & 3, (ps >> 18) & 1);
+    send_str(fd, line);
+
+    /* Windowed registers a0-a15 */
+    for (int r = 0; r < 16; r += 4) {
+        snprintf(line, sizeof(line), "REG a%d=%08X a%d=%08X a%d=%08X a%d=%08X\n",
+                 r, ar_read(cpu, r), r+1, ar_read(cpu, r+1),
+                 r+2, ar_read(cpu, r+2), r+3, ar_read(cpu, r+3));
+        send_str(fd, line);
+    }
+
+    snprintf(line, sizeof(line), "REG SAR=%u WindowBase=%u\n",
+             cpu->sar, cpu->windowbase);
+    send_str(fd, line);
+
+    snprintf(line, sizeof(line), "REG LBEG=0x%08X LEND=0x%08X LCOUNT=%u\n",
+             cpu->lbeg, cpu->lend, cpu->lcount);
+    send_str(fd, line);
+
+    snprintf(line, sizeof(line), "REG cycles=%llu\n", (unsigned long long)cpu->cycle_count);
+    send_str(fd, line);
+
+    send_str(fd, "OK\n");
+}
+
+static void handle_memdump(int fd, const char *args)
+{
+    if (!emu_flexe_active()) {
+        send_str(fd, "ERR flexe not active\n");
+        return;
+    }
+
+    uint32_t addr = 0;
+    int len = 0;
+    if (sscanf(args, "%i %i", &addr, &len) < 2) {
+        send_str(fd, "ERR usage: memdump <addr> <len>\n");
+        return;
+    }
+    if (len < 0) len = 0;
+    if (len > 4096) len = 4096;
+
+    char line[80];
+    for (int off = 0; off < len; off += 16) {
+        int n = len - off;
+        if (n > 16) n = 16;
+        int pos = snprintf(line, sizeof(line), "MEM 0x%08X:", addr + off);
+        for (int i = 0; i < n; i++)
+            pos += snprintf(line + pos, sizeof(line) - pos, " %02X",
+                           emu_flexe_mem_read8(addr + off + i));
+        pos += snprintf(line + pos, sizeof(line) - pos, "\n");
+        send_str(fd, line);
+    }
+    send_str(fd, "OK\n");
+}
+
+static void handle_disasm(int fd, const char *args)
+{
+    if (!emu_flexe_active()) {
+        send_str(fd, "ERR flexe not active\n");
+        return;
+    }
+
+    uint32_t addr = 0;
+    int count = 10;
+    if (sscanf(args, "%i %i", &addr, &count) < 1) {
+        send_str(fd, "ERR usage: disasm <addr> [count]\n");
+        return;
+    }
+    if (count < 1) count = 1;
+    if (count > 200) count = 200;
+
+    xtensa_cpu_t *cpu = emu_flexe_get_cpu();
+    char dis[128], line[192];
+    for (int i = 0; i < count; i++) {
+        int insn_len = xtensa_disasm(cpu, addr, dis, sizeof(dis));
+        if (insn_len <= 0) {
+            snprintf(line, sizeof(line), "DIS 0x%08X <invalid>\n", addr);
+            send_str(fd, line);
+            break;
+        }
+        snprintf(line, sizeof(line), "DIS 0x%08X %s\n", addr, dis);
+        send_str(fd, line);
+        addr += insn_len;
+    }
+    send_str(fd, "OK\n");
+}
+
+#endif /* EMU_USE_FLEXE */
+
 /* ---- Poll ---- */
 
 void emu_control_poll(void)
@@ -306,6 +573,26 @@ void emu_control_poll(void)
         char resp[64];
         snprintf(resp, sizeof(resp), "OK 0x%08X = 0x%08X (%u)\n", addr, val, val);
         send_str(client, resp);
+#ifdef EMU_USE_FLEXE
+    } else if (strncmp(buf, "break ", 6) == 0) {
+        handle_break(client, buf + 6);
+    } else if (strncmp(buf, "clearbreak ", 11) == 0) {
+        handle_clearbreak(client, buf + 11);
+    } else if (strcmp(buf, "clearbreak") == 0) {
+        handle_clearbreak(client, "all");
+    } else if (strcmp(buf, "pause") == 0) {
+        handle_pause(client);
+    } else if (strcmp(buf, "continue") == 0 || strcmp(buf, "c") == 0) {
+        handle_continue(client);
+    } else if (strncmp(buf, "step", 4) == 0 && (buf[4] == '\0' || buf[4] == ' ')) {
+        handle_step(client, buf + 4);
+    } else if (strcmp(buf, "regs") == 0) {
+        handle_regs(client);
+    } else if (strncmp(buf, "memdump ", 8) == 0) {
+        handle_memdump(client, buf + 8);
+    } else if (strncmp(buf, "disasm ", 7) == 0) {
+        handle_disasm(client, buf + 7);
+#endif
     } else {
         send_str(client, "ERR unknown command\n");
     }

@@ -23,6 +23,8 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <unistd.h>
+#include <time.h>
 #include <pthread.h>
 
 /* From emu_touch.c */
@@ -41,6 +43,13 @@ extern uint64_t emu_sdcard_size_bytes;
 extern char emu_log_ring[][48];
 extern int  emu_log_head;
 #define EMU_LOG_LINES 64
+
+/* Debug pause state (cross-thread) */
+static pthread_mutex_t debug_mutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t  debug_cond  = PTHREAD_COND_INITIALIZER;
+static volatile int    debug_paused = 0;
+static volatile int    debug_pause_requested = 0;
+static volatile int    cpu_thread_alive = 0; /* 1 while emu_flexe_run() is active */
 
 /* Module state */
 static int flexe_active = 0;
@@ -202,10 +211,52 @@ int emu_flexe_init(const char *bin_path, const char *elf_path)
 
 void emu_flexe_run(void)
 {
-    while (emu_app_running && cpu.running && !cpu.halted) {
+    cpu_thread_alive = 1;
+    while (emu_app_running && cpu.running) {
+        /* Check if pause requested or breakpoint hit */
+        if (debug_pause_requested || cpu.breakpoint_hit) {
+            int was_bp = cpu.breakpoint_hit;
+            pthread_mutex_lock(&debug_mutex);
+            debug_paused = 1;
+            debug_pause_requested = 0;
+            cpu.breakpoint_hit = false;
+            /* Signal anyone waiting for pause to take effect */
+            pthread_cond_broadcast(&debug_cond);
+            /* Wait until continued */
+            while (debug_paused && emu_app_running)
+                pthread_cond_wait(&debug_cond, &debug_mutex);
+            pthread_mutex_unlock(&debug_mutex);
+            /* If we stopped at a breakpoint, execute one step with
+               breakpoints suppressed so we can move past the BP address */
+            if (was_bp && cpu.breakpoint_count > 0) {
+                int saved = cpu.breakpoint_count;
+                cpu.breakpoint_count = 0;
+                xtensa_step(&cpu);
+                cpu.breakpoint_count = saved;
+            }
+            continue;
+        }
+
+        /* If halted (WAITI), sleep briefly and poll for debug/interrupts */
+        if (cpu.halted) {
+            usleep(1000);
+            /* Try one step to check for pending interrupts */
+            xtensa_step(&cpu);
+            continue;
+        }
+
         int ran = xtensa_run(&cpu, 10000);
-        if (ran < 10000) break;
+        if (ran < 10000 && !cpu.breakpoint_hit && !debug_pause_requested
+            && !cpu.halted)
+            break;
     }
+
+    cpu_thread_alive = 0;
+    /* If someone is waiting for pause, signal them */
+    pthread_mutex_lock(&debug_mutex);
+    debug_paused = 1; /* treat stopped CPU as paused */
+    pthread_cond_broadcast(&debug_cond);
+    pthread_mutex_unlock(&debug_mutex);
 
     /* Flush any partial UART line */
     uart_flush_line();
@@ -238,6 +289,75 @@ uint32_t emu_flexe_mem_read32(uint32_t addr)
 {
     if (!flexe_active || !mem) return 0;
     return mem_read32(mem, addr);
+}
+
+uint8_t emu_flexe_mem_read8(uint32_t addr)
+{
+    if (!flexe_active || !mem) return 0;
+    return mem_read8(mem, addr);
+}
+
+uint16_t emu_flexe_mem_read16(uint32_t addr)
+{
+    if (!flexe_active || !mem) return 0;
+    return mem_read16(mem, addr);
+}
+
+xtensa_cpu_t *emu_flexe_get_cpu(void)
+{
+    return flexe_active ? &cpu : NULL;
+}
+
+xtensa_mem_t *emu_flexe_get_mem(void)
+{
+    return flexe_active ? mem : NULL;
+}
+
+void emu_flexe_debug_break(void)
+{
+    debug_pause_requested = 1;
+}
+
+void emu_flexe_debug_continue(void)
+{
+    /* If CPU stopped (not just paused), restart it */
+    if (!cpu.running) {
+        cpu.running = true;
+    }
+    if (cpu.halted) {
+        cpu.halted = false;
+    }
+    pthread_mutex_lock(&debug_mutex);
+    debug_paused = 0;
+    pthread_cond_broadcast(&debug_cond);
+    pthread_mutex_unlock(&debug_mutex);
+}
+
+int emu_flexe_debug_paused(void)
+{
+    return debug_paused || !cpu_thread_alive;
+}
+
+int emu_flexe_debug_wait_paused(int timeout_ms)
+{
+    pthread_mutex_lock(&debug_mutex);
+    if (!debug_paused) {
+        struct timespec ts;
+        clock_gettime(CLOCK_REALTIME, &ts);
+        ts.tv_sec  += timeout_ms / 1000;
+        ts.tv_nsec += (timeout_ms % 1000) * 1000000L;
+        if (ts.tv_nsec >= 1000000000L) {
+            ts.tv_sec++;
+            ts.tv_nsec -= 1000000000L;
+        }
+        while (!debug_paused) {
+            if (pthread_cond_timedwait(&debug_cond, &debug_mutex, &ts) != 0)
+                break;
+        }
+    }
+    int result = debug_paused;
+    pthread_mutex_unlock(&debug_mutex);
+    return result;
 }
 
 #endif /* EMU_USE_FLEXE */
