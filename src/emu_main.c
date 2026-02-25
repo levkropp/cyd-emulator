@@ -29,6 +29,8 @@
 #include "emu_json.h"
 #include "emu_flexe.h"
 #include "emu_control.h"
+#include "xtensa.h"
+#include "elf_symbols.h"
 
 /* ---- Globals from other emulator modules ---- */
 
@@ -112,6 +114,11 @@ static struct board_profile active;
 
 /* ---- Path buffers for dynamically loaded paths ---- */
 static char sdcard_path_buf[512];
+
+/* ---- IPS (instructions per second) tracking ---- */
+static uint64_t ips_prev_cycles = 0;
+static uint64_t ips_last_time_us = 0;   /* microseconds from clock_gettime */
+static double   ips_display = 0.0;      /* smoothed IPS for display */
 
 /* ---- App thread ---- */
 static pthread_t app_thread;
@@ -260,6 +267,76 @@ static void render_panel(uint32_t *buf, int pw, int ph)
                b->sd_slots, b->sd_slots != 1 ? "s" : "");
     panel_line(buf, pw, ph, row++, PANEL_FG, "  USB:   %s", b->usb_type);
     panel_line(buf, pw, ph, row++, PANEL_FG, "  Mode:  flexe");
+    row++;
+
+    /* ---- Emulator stats ---- */
+    panel_line(buf, pw, ph, row++, PANEL_HEAD, " Emulator");
+    panel_separator(buf, pw, ph, row++);
+
+    xtensa_cpu_t *cpu = emu_flexe_get_cpu();
+    if (cpu) {
+        /* Current PC + symbol */
+        uint32_t pc = cpu->pc;
+        const elf_symbols_t *esyms = emu_flexe_get_syms();
+        elf_sym_info_t sym;
+        if (esyms && elf_symbols_lookup(esyms, pc, &sym)) {
+            if (sym.offset)
+                panel_line(buf, pw, ph, row++, PANEL_FG,
+                           "  PC: %08X %s+0x%x", pc, sym.name, sym.offset);
+            else
+                panel_line(buf, pw, ph, row++, PANEL_FG,
+                           "  PC: %08X %s", pc, sym.name);
+        } else {
+            panel_line(buf, pw, ph, row++, PANEL_FG, "  PC: %08X", pc);
+        }
+
+        /* Cycle count */
+        uint64_t cyc = cpu->cycle_count;
+        if (cyc >= 1000000000ULL)
+            panel_line(buf, pw, ph, row++, PANEL_FG,
+                       "  Cycles: %.2fG", (double)cyc / 1e9);
+        else if (cyc >= 1000000ULL)
+            panel_line(buf, pw, ph, row++, PANEL_FG,
+                       "  Cycles: %.2fM", (double)cyc / 1e6);
+        else
+            panel_line(buf, pw, ph, row++, PANEL_FG,
+                       "  Cycles: %llu", (unsigned long long)cyc);
+
+        /* IPS — update once per second, display smoothed */
+        struct timespec now_ts;
+        clock_gettime(CLOCK_MONOTONIC, &now_ts);
+        uint64_t now_us = (uint64_t)now_ts.tv_sec * 1000000ULL
+                        + (uint64_t)now_ts.tv_nsec / 1000ULL;
+        uint64_t elapsed_us = now_us - ips_last_time_us;
+        if (elapsed_us >= 500000) {  /* update every 0.5s */
+            uint64_t delta = cyc - ips_prev_cycles;
+            double raw_ips = (double)delta / ((double)elapsed_us / 1e6);
+            /* Exponential smoothing (alpha=0.3) */
+            if (ips_display < 1.0)
+                ips_display = raw_ips;
+            else
+                ips_display = 0.3 * raw_ips + 0.7 * ips_display;
+            ips_prev_cycles = cyc;
+            ips_last_time_us = now_us;
+        }
+
+        if (ips_display >= 1e9)
+            panel_line(buf, pw, ph, row++, PANEL_GREEN,
+                       "  Speed: %.2f GIPS", ips_display / 1e9);
+        else if (ips_display >= 1e6)
+            panel_line(buf, pw, ph, row++, PANEL_GREEN,
+                       "  Speed: %.1f MIPS", ips_display / 1e6);
+        else if (ips_display >= 1e3)
+            panel_line(buf, pw, ph, row++, PANEL_GREEN,
+                       "  Speed: %.0f KIPS", ips_display / 1e3);
+        else if (ips_display > 0)
+            panel_line(buf, pw, ph, row++, PANEL_FG,
+                       "  Speed: %.0f IPS", ips_display);
+        else
+            panel_line(buf, pw, ph, row++, PANEL_DIM, "  Speed: ---");
+    } else {
+        panel_line(buf, pw, ph, row++, PANEL_DIM, "  (not running)");
+    }
     row++;
 
     panel_line(buf, pw, ph, row++, PANEL_HEAD, " Touch Events");
