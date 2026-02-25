@@ -175,8 +175,10 @@ int emu_flexe_init(const char *bin_path, const char *elf_path)
     if (dstubs) {
         display_stubs_set_framebuf(dstubs, emu_framebuf, &emu_framebuf_mutex,
                                     320, 240);
-        if (syms)
+        if (syms) {
             display_stubs_hook_symbols(dstubs, syms);
+            display_stubs_hook_tft_espi(dstubs, syms);
+        }
     }
 
     /* Touch stubs — read from SDL mouse input */
@@ -309,6 +311,11 @@ xtensa_cpu_t *emu_flexe_get_cpu(void)
 xtensa_mem_t *emu_flexe_get_mem(void)
 {
     return flexe_active ? mem : NULL;
+}
+
+const elf_symbols_t *emu_flexe_get_syms(void)
+{
+    return flexe_active ? syms : NULL;
 }
 
 void emu_flexe_debug_break(void)

@@ -13,6 +13,7 @@
 /* Forward declarations for flexe types */
 typedef struct xtensa_cpu xtensa_cpu_t;
 typedef struct xtensa_mem xtensa_mem_t;
+typedef struct elf_symbols elf_symbols_t;
 
 int  emu_flexe_init(const char *bin_path, const char *elf_path);
 void emu_flexe_run(void);       /* blocks until emu_app_running==0 or cpu stops */
@@ -31,5 +32,8 @@ void emu_flexe_debug_break(void);     /* request pause from control thread */
 void emu_flexe_debug_continue(void);  /* resume execution */
 int  emu_flexe_debug_paused(void);    /* 1 if CPU is paused */
 int  emu_flexe_debug_wait_paused(int timeout_ms); /* wait for pause, return 1 if paused */
+
+/* Symbol table accessor (for HUD display) */
+const elf_symbols_t *emu_flexe_get_syms(void);
 
 #endif /* EMU_FLEXE_H */
