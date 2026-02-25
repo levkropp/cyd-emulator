@@ -1219,6 +1219,10 @@ static void signal_handler(int sig)
 
 int main(int argc, char *argv[])
 {
+    /* Force line-buffered stdout/stderr so log output appears in terminal */
+    setvbuf(stdout, NULL, _IOLBF, 0);
+    setvbuf(stderr, NULL, _IOLBF, 0);
+
     saved_argc = argc;
     saved_argv = argv;
 
