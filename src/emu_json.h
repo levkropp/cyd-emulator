@@ -12,7 +12,8 @@ struct emu_state {
     const struct board_profile *board;
     int scale;
     int turbo;
-    const char *payload_path;
+    const char *firmware_path;
+    const char *elf_path;
     uint64_t sdcard_size_bytes;
 };
 

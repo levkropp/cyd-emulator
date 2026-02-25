@@ -19,10 +19,8 @@
 #include "emu_flexe.h"
 #include "emu_board.h"
 
-#ifdef EMU_USE_FLEXE
 #include "xtensa.h"
 #include "memory.h"
-#endif
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -231,13 +229,11 @@ static void handle_screenshot(int fd, const char *args)
 
 static void handle_status(int fd)
 {
-    const char *mode = emu_flexe_active() ? "flexe" : "native";
     char resp[256];
-    snprintf(resp, sizeof(resp), "OK board=%s display=%dx%d running=%d mode=%s\n",
+    snprintf(resp, sizeof(resp), "OK board=%s display=%dx%d running=%d mode=flexe\n",
              emu_active_board ? emu_active_board->model : "unknown",
              DISPLAY_WIDTH, DISPLAY_HEIGHT,
-             emu_app_running ? 1 : 0,
-             mode);
+             emu_app_running ? 1 : 0);
     send_str(fd, resp);
 }
 
@@ -263,9 +259,7 @@ static void handle_quit(int fd)
     SDL_PushEvent(&ev);
 }
 
-/* ---- Debug command handlers (flexe only) ---- */
-
-#ifdef EMU_USE_FLEXE
+/* ---- Debug command handlers ---- */
 
 static void handle_break(int fd, const char *args)
 {
@@ -523,8 +517,6 @@ static void handle_disasm(int fd, const char *args)
     send_str(fd, "OK\n");
 }
 
-#endif /* EMU_USE_FLEXE */
-
 /* ---- Poll ---- */
 
 void emu_control_poll(void)
@@ -573,7 +565,6 @@ void emu_control_poll(void)
         char resp[64];
         snprintf(resp, sizeof(resp), "OK 0x%08X = 0x%08X (%u)\n", addr, val, val);
         send_str(client, resp);
-#ifdef EMU_USE_FLEXE
     } else if (strncmp(buf, "break ", 6) == 0) {
         handle_break(client, buf + 6);
     } else if (strncmp(buf, "clearbreak ", 11) == 0) {
@@ -592,7 +583,6 @@ void emu_control_poll(void)
         handle_memdump(client, buf + 8);
     } else if (strncmp(buf, "disasm ", 7) == 0) {
         handle_disasm(client, buf + 7);
-#endif
     } else {
         send_str(client, "ERR unknown command\n");
     }
