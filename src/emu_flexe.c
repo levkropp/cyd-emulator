@@ -249,6 +249,7 @@ void emu_flexe_run(void)
 
         uint32_t pc_before = cpu.pc;
         int ran = xtensa_run(&cpu, 10000);
+        if (frt) freertos_stubs_check_preempt(frt);
         if (ran < 10000 && !cpu.breakpoint_hit && !debug_pause_requested
             && !cpu.halted)
             break;
