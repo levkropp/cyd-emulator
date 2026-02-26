@@ -177,7 +177,9 @@ int emu_flexe_init(const char *bin_path, const char *elf_path)
                                     320, 240);
         if (syms) {
             display_stubs_hook_symbols(dstubs, syms);
-            display_stubs_hook_tft_espi(dstubs, syms);
+            int espi_n = display_stubs_hook_tft_espi(dstubs, syms);
+            int esprite_n = display_stubs_hook_tft_esprite(dstubs, syms);
+            printf("  Hooks:   TFT_eSPI=%d, TFT_eSprite=%d\n", espi_n, esprite_n);
         }
     }
 
@@ -245,10 +247,16 @@ void emu_flexe_run(void)
             continue;
         }
 
+        uint32_t pc_before = cpu.pc;
         int ran = xtensa_run(&cpu, 10000);
         if (ran < 10000 && !cpu.breakpoint_hit && !debug_pause_requested
             && !cpu.halted)
             break;
+        /* Detect infinite self-loop (j self) — start cooperative scheduler
+         * or launch deferred task when boot code reaches a dead end */
+        if (cpu.pc == pc_before && frt) {
+            freertos_stubs_start_scheduler(frt);
+        }
     }
 
     cpu_thread_alive = 0;
