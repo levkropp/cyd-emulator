@@ -20,6 +20,7 @@
 #include "sdcard_stubs.h"
 #include "wifi_stubs.h"
 #include "sha_stubs.h"
+#include "aes_stubs.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -65,6 +66,7 @@ static touch_stubs_t     *tstubs;
 static sdcard_stubs_t    *sstubs;
 static wifi_stubs_t      *wstubs;
 static sha_stubs_t       *shstubs;
+static aes_stubs_t       *astubs;
 static elf_symbols_t     *syms;
 
 /* UART line accumulator */
@@ -211,6 +213,11 @@ int emu_flexe_init(const char *bin_path, const char *elf_path)
     if (shstubs && syms)
         sha_stubs_hook_symbols(shstubs, syms);
 
+    /* AES hardware accelerator stubs */
+    astubs = aes_stubs_create(&cpu);
+    if (astubs && syms)
+        aes_stubs_hook_symbols(astubs, syms);
+
     /* WiFi / lwip socket bridge */
     wstubs = wifi_stubs_create(&cpu);
     if (wstubs && syms)
@@ -292,6 +299,7 @@ void emu_flexe_shutdown(void)
 
     wifi_stubs_destroy(wstubs);      wstubs = NULL;
     sha_stubs_destroy(shstubs);      shstubs = NULL;
+    aes_stubs_destroy(astubs);       astubs = NULL;
     sdcard_stubs_destroy(sstubs);    sstubs = NULL;
     touch_stubs_destroy(tstubs);     tstubs = NULL;
     display_stubs_destroy(dstubs);   dstubs = NULL;
