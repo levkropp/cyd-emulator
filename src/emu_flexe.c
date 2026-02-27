@@ -18,6 +18,8 @@
 #include "display_stubs.h"
 #include "touch_stubs.h"
 #include "sdcard_stubs.h"
+#include "wifi_stubs.h"
+#include "sha_stubs.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -61,6 +63,8 @@ static esp_timer_stubs_t *etimer;
 static display_stubs_t   *dstubs;
 static touch_stubs_t     *tstubs;
 static sdcard_stubs_t    *sstubs;
+static wifi_stubs_t      *wstubs;
+static sha_stubs_t       *shstubs;
 static elf_symbols_t     *syms;
 
 /* UART line accumulator */
@@ -202,6 +206,16 @@ int emu_flexe_init(const char *bin_path, const char *elf_path)
             sdcard_stubs_hook_symbols(sstubs, syms);
     }
 
+    /* SHA hardware accelerator stubs */
+    shstubs = sha_stubs_create(&cpu);
+    if (shstubs && syms)
+        sha_stubs_hook_symbols(shstubs, syms);
+
+    /* WiFi / lwip socket bridge */
+    wstubs = wifi_stubs_create(&cpu);
+    if (wstubs && syms)
+        wifi_stubs_hook_symbols(wstubs, syms);
+
     /* Set entry point and initial stack pointer */
     if (res.entry_point != 0)
         cpu.pc = res.entry_point;
@@ -276,6 +290,8 @@ void emu_flexe_shutdown(void)
 {
     if (!flexe_active) return;
 
+    wifi_stubs_destroy(wstubs);      wstubs = NULL;
+    sha_stubs_destroy(shstubs);      shstubs = NULL;
     sdcard_stubs_destroy(sstubs);    sstubs = NULL;
     touch_stubs_destroy(tstubs);     tstubs = NULL;
     display_stubs_destroy(dstubs);   dstubs = NULL;
