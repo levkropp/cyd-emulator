@@ -8,6 +8,7 @@
 
 #include "emu_flexe.h"
 #include "flexe_session.h"
+#include "display_stubs.h"
 #include "xtensa.h"
 #include "memory.h"
 #include "freertos_stubs.h"
@@ -195,6 +196,20 @@ void emu_flexe_shutdown(void)
 int emu_flexe_active(void)
 {
     return flexe_active;
+}
+
+int emu_flexe_display_width(void)
+{
+    if (!flexe_active) return 320;
+    display_stubs_t *ds = flexe_session_display(session);
+    return display_stubs_get_width(ds);
+}
+
+int emu_flexe_display_height(void)
+{
+    if (!flexe_active) return 240;
+    display_stubs_t *ds = flexe_session_display(session);
+    return display_stubs_get_height(ds);
 }
 
 uint32_t emu_flexe_mem_read32(uint32_t addr)

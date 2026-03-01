@@ -23,6 +23,10 @@ uint32_t emu_flexe_mem_read32(uint32_t addr);
 uint8_t  emu_flexe_mem_read8(uint32_t addr);
 uint16_t emu_flexe_mem_read16(uint32_t addr);
 
+/* Display dimension queries (rotation-aware) */
+int emu_flexe_display_width(void);
+int emu_flexe_display_height(void);
+
 /* Debug accessors (CPU thread must be paused) */
 xtensa_cpu_t *emu_flexe_get_cpu(void);
 xtensa_mem_t *emu_flexe_get_mem(void);
