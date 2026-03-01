@@ -187,7 +187,9 @@ int emu_flexe_init(const char *bin_path, const char *elf_path)
             display_stubs_hook_symbols(dstubs, syms);
             int espi_n = display_stubs_hook_tft_espi(dstubs, syms);
             int esprite_n = display_stubs_hook_tft_esprite(dstubs, syms);
-            printf("  Hooks:   TFT_eSPI=%d, TFT_eSprite=%d\n", espi_n, esprite_n);
+            int ofr_n = display_stubs_hook_ofr(dstubs, syms);
+            printf("  Hooks:   TFT_eSPI=%d, TFT_eSprite=%d, OFR=%d\n",
+                   espi_n, esprite_n, ofr_n);
         }
     }
 
