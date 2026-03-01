@@ -314,7 +314,13 @@ void emu_flexe_run(void)
         if (cpu[1].running) {
             xtensa_run(&cpu[1], 10000);
             if (frt) freertos_stubs_check_preempt_core(frt, 1);
-            cpu[1].cycle_count = cpu[0].cycle_count;
+            /* Sync cycle counts: use max to preserve vTaskDelay fast-forward */
+            if (cpu[1].cycle_count > cpu[0].cycle_count) {
+                cpu[0].cycle_count = cpu[1].cycle_count;
+                cpu[0].virtual_time_us = cpu[1].cycle_count / 160;
+            } else {
+                cpu[1].cycle_count = cpu[0].cycle_count;
+            }
             cpu[1].virtual_time_us = cpu[0].virtual_time_us;
         }
     }
