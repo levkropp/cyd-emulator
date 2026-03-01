@@ -19,6 +19,7 @@
 #include "touch_stubs.h"
 #include "sdcard_stubs.h"
 #include "wifi_stubs.h"
+#include "bt_stubs.h"
 #include "sha_stubs.h"
 #include "aes_stubs.h"
 #include "mpi_stubs.h"
@@ -66,6 +67,7 @@ static display_stubs_t   *dstubs;
 static touch_stubs_t     *tstubs;
 static sdcard_stubs_t    *sstubs;
 static wifi_stubs_t      *wstubs;
+static bt_stubs_t        *bstubs;
 static sha_stubs_t       *shstubs;
 static aes_stubs_t       *astubs;
 static mpi_stubs_t       *mstubs;
@@ -232,6 +234,11 @@ int emu_flexe_init(const char *bin_path, const char *elf_path)
     if (wstubs && syms)
         wifi_stubs_hook_symbols(wstubs, syms);
 
+    /* Bluetooth / NimBLE stubs */
+    bstubs = bt_stubs_create(&cpu[0]);
+    if (bstubs && syms)
+        bt_stubs_hook_symbols(bstubs, syms);
+
     /* Set entry point and initial stack pointer */
     if (res.entry_point != 0)
         cpu[0].pc = res.entry_point;
@@ -299,10 +306,17 @@ void emu_flexe_run(void)
         if (ran < 10000 && !cpu[0].breakpoint_hit && !debug_pause_requested
             && !cpu[0].halted)
             break;
-        /* Detect infinite self-loop (j self) — start cooperative scheduler
-         * or launch deferred task when boot code reaches a dead end */
+        /* Detect infinite self-loop (j self) — launch deferred task
+         * when boot code reaches a dead end */
         if (cpu[0].pc == pc_before && frt) {
-            freertos_stubs_start_scheduler(frt);
+            uint32_t param;
+            uint32_t fn = freertos_stubs_consume_deferred_task(frt, &param);
+            if (fn) {
+                ar_write(&cpu[0], 1, 0x3FFE0000u);
+                ar_write(&cpu[0], 2, param);
+                cpu[0].pc = fn;
+                cpu[0].ps = 0x00040020u;
+            }
         }
 
         /* Check if core 1 should start */
@@ -344,6 +358,7 @@ void emu_flexe_shutdown(void)
     if (!flexe_active) return;
 
     wifi_stubs_destroy(wstubs);      wstubs = NULL;
+    bt_stubs_destroy(bstubs);        bstubs = NULL;
     sha_stubs_destroy(shstubs);      shstubs = NULL;
     aes_stubs_destroy(astubs);       astubs = NULL;
     mpi_stubs_destroy(mstubs);       mstubs = NULL;

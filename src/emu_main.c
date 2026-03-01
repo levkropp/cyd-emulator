@@ -94,7 +94,6 @@ int  emu_log_head = 0;
 #define MENU_HI_FG   0xFFFFFFFF   /* highlighted item text */
 #define MENU_SEP_CLR 0xFF444466   /* separator line */
 #define MENU_DIM     0xFF888888
-#define TURBO_GREEN  0xFF00FF00
 #define DROP_BG      0xFF252540   /* dropdown background */
 #define DROP_BORDER  0xFF555577   /* dropdown border */
 
@@ -144,8 +143,8 @@ static const struct { const char *label; int x, w; } menu_hdrs[] = {
 #define DROP_W        (DROP_CHARS * FONT_WIDTH)   /* 192px */
 #define DROP_ITEM_H   FONT_HEIGHT                 /* 16px per item */
 
-#define FILE_ITEMS    6
-#define VIEW_ITEMS    5
+#define FILE_ITEMS    7
+#define VIEW_ITEMS    4
 #define HELP_ITEMS    2
 
 /* ---- Pixel buffer helpers ---- */
@@ -397,13 +396,8 @@ static void render_menu_bar(uint32_t *buf, int bw, int bh)
         render_text(buf, bw, bh, menu_hdrs[i].x, text_y, menu_hdrs[i].label, fg);
     }
 
-    /* Turbo/speed indicator on the right */
-    if (emu_turbo_mode) {
-        const char *ind = "[TURBO]";
-        int iw = 7 * FONT_WIDTH;
-        int ix = bw - iw - FONT_WIDTH;
-        render_text(buf, bw, bh, ix, text_y, ind, TURBO_GREEN);
-    } else {
+    /* Scale indicator on the right */
+    {
         char ind[8];
         snprintf(ind, sizeof(ind), "[%dx]", scale);
         int iw = (int)strlen(ind) * FONT_WIDTH;
@@ -426,16 +420,16 @@ static int dropdown_item_count(void)
 
 static int dropdown_is_separator(int item)
 {
-    return (menu_open == MENU_FILE && item == 3);
+    return (menu_open == MENU_FILE && item == 4);
 }
 
 static int dropdown_is_disabled(int item)
 {
     if (menu_open == MENU_FILE) {
         switch (item) {
-        case 0: return !app_thread_valid;  /* Attach SD Image */
-        case 1: return !app_thread_valid;  /* Save State */
-        case 4: return !app_thread_valid;  /* Restart App */
+        case 1: return !app_thread_valid;  /* Attach SD Image */
+        case 2: return !app_thread_valid;  /* Save State */
+        case 5: return !app_thread_valid;  /* Restart App */
         }
     }
     return 0;
@@ -447,24 +441,21 @@ static void dropdown_item_label(int item, char *buf, int bufsize)
     switch (menu_open) {
     case MENU_FILE:
         switch (item) {
-        case 0: snprintf(buf, bufsize, " Attach SD Image..."); break;
-        case 1: snprintf(buf, bufsize, " Save State..."); break;
-        case 2: snprintf(buf, bufsize, " Load State..."); break;
-        case 3: break; /* separator */
-        case 4: snprintf(buf, bufsize, " Restart App      R"); break;
-        case 5: snprintf(buf, bufsize, " Quit             Q"); break;
+        case 0: snprintf(buf, bufsize, " Load Firmware..."); break;
+        case 1: snprintf(buf, bufsize, " Attach SD Image..."); break;
+        case 2: snprintf(buf, bufsize, " Save State..."); break;
+        case 3: snprintf(buf, bufsize, " Load State..."); break;
+        case 4: break; /* separator */
+        case 5: snprintf(buf, bufsize, " Restart App      R"); break;
+        case 6: snprintf(buf, bufsize, " Quit             Q"); break;
         }
         break;
     case MENU_VIEW:
         switch (item) {
-        case 0:
-            snprintf(buf, bufsize, " %s Turbo Mode   Tab",
-                     emu_turbo_mode ? "[x]" : "[ ]");
-            break;
-        case 1: snprintf(buf, bufsize, " %s Scale 1x", scale == 1 ? ">" : " "); break;
-        case 2: snprintf(buf, bufsize, " %s Scale 2x", scale == 2 ? ">" : " "); break;
-        case 3: snprintf(buf, bufsize, " %s Scale 3x", scale == 3 ? ">" : " "); break;
-        case 4: snprintf(buf, bufsize, " %s Scale 4x", scale == 4 ? ">" : " "); break;
+        case 0: snprintf(buf, bufsize, " %s Scale 1x", scale == 1 ? ">" : " "); break;
+        case 1: snprintf(buf, bufsize, " %s Scale 2x", scale == 2 ? ">" : " "); break;
+        case 2: snprintf(buf, bufsize, " %s Scale 3x", scale == 3 ? ">" : " "); break;
+        case 3: snprintf(buf, bufsize, " %s Scale 4x", scale == 4 ? ">" : " "); break;
         }
         break;
     case MENU_HELP:
@@ -728,7 +719,7 @@ static void do_save_state(void)
     struct emu_state state = {
         .board = &active,
         .scale = scale,
-        .turbo = emu_turbo_mode,
+        .turbo = 0,
         .firmware_path = firmware_path,
         .elf_path = elf_path,
         .sdcard_size_bytes = emu_sdcard_size_bytes,
@@ -764,9 +755,6 @@ static void do_load_state(void)
 
     /* Apply board config */
     apply_board(&loaded_board);
-
-    /* Apply emulation settings */
-    emu_turbo_mode = state.turbo;
 
     /* Derive image path from JSON path */
     char img_path[512];
@@ -827,6 +815,53 @@ static void do_attach_sd(void)
     start_app_thread();
 }
 
+static char firmware_path_buf[512];
+static char elf_path_buf[512];
+
+static void do_load_firmware(void)
+{
+    char *bin = zenity_open("Load Firmware Binary", "Firmware | *.bin");
+    if (!bin) return;
+
+    /* Auto-detect matching .elf: try replacing .bin with .elf */
+    char *elf = NULL;
+    size_t blen = strlen(bin);
+    if (blen > 4 && strcmp(bin + blen - 4, ".bin") == 0) {
+        char elf_try[512];
+        snprintf(elf_try, sizeof(elf_try), "%.*s.elf", (int)(blen - 4), bin);
+        if (access(elf_try, R_OK) == 0)
+            elf = strdup(elf_try);
+    }
+
+    /* If no auto-detected .elf, ask user */
+    if (!elf)
+        elf = zenity_open("Load ELF Symbols (optional)", "ELF files | *.elf");
+
+    stop_app_thread();
+    sdcard_deinit();
+
+    strncpy(firmware_path_buf, bin, sizeof(firmware_path_buf) - 1);
+    firmware_path_buf[sizeof(firmware_path_buf) - 1] = '\0';
+    firmware_path = firmware_path_buf;
+
+    if (elf) {
+        strncpy(elf_path_buf, elf, sizeof(elf_path_buf) - 1);
+        elf_path_buf[sizeof(elf_path_buf) - 1] = '\0';
+        elf_path = elf_path_buf;
+        free(elf);
+    } else {
+        elf_path = NULL;
+    }
+    free(bin);
+
+    printf("Loading firmware: %s\n", firmware_path);
+    if (elf_path) printf("ELF symbols: %s\n", elf_path);
+
+    emu_flexe_init(firmware_path, elf_path);
+    sdcard_init();
+    start_app_thread();
+}
+
 static void do_restart_app(void)
 {
     if (!app_thread_valid) return;
@@ -845,20 +880,20 @@ static void dropdown_execute(int item)
     switch (menu_open) {
     case MENU_FILE:
         switch (item) {
-        case 0: do_attach_sd(); break;
-        case 1: do_save_state(); break;
-        case 2: do_load_state(); break;
-        case 4: do_restart_app(); break;
-        case 5: emu_window_running = 0; emu_app_running = 0; break;  /* Quit */
+        case 0: do_load_firmware(); break;
+        case 1: do_attach_sd(); break;
+        case 2: do_save_state(); break;
+        case 3: do_load_state(); break;
+        case 5: do_restart_app(); break;
+        case 6: emu_window_running = 0; emu_app_running = 0; break;  /* Quit */
         }
         break;
     case MENU_VIEW:
         switch (item) {
-        case 0: emu_turbo_mode = !emu_turbo_mode; break;
-        case 1: resize_window(1); break;
-        case 2: resize_window(2); break;
-        case 3: resize_window(3); break;
-        case 4: resize_window(4); break;
+        case 0: resize_window(1); break;
+        case 1: resize_window(2); break;
+        case 2: resize_window(3); break;
+        case 3: resize_window(4); break;
         }
         break;
     case MENU_HELP:
@@ -866,15 +901,15 @@ static void dropdown_execute(int item)
         case 0:
             printf("\n  Controls:\n"
                    "  Click on display   Tap touchscreen\n"
-                   "  Tab                Toggle turbo mode\n"
                    "  R                  Restart app\n"
                    "  Q / Ctrl+C         Quit\n"
-                   "  File menu          SD image, save/load state\n"
-                   "  View menu          Turbo mode, display scale\n\n");
+                   "  File menu          Load firmware, SD image, save/load\n"
+                   "  View menu          Display scale\n\n");
             break;
         case 1:
-            printf("\n  CYD Emulator v3\n"
+            printf("\n  CYD Emulator v4\n"
                    "  ESP32 Cheap Yellow Display emulator\n"
+                   "  Xtensa LX6 CPU + FreeRTOS + WiFi/BLE stubs\n"
                    "  SDL2 + custom rendering\n\n");
             break;
         }
@@ -1007,12 +1042,10 @@ static void usage(const char *prog)
         "  --sdcard <file>         SD card image path (default: sd.img)\n"
         "  --sdcard-size <size>    SD card size, e.g. 4G (default: 4G)\n"
         "  --scale <n>             Display scale factor 1-4 (default: 2)\n"
-        "  --turbo                 Start in turbo mode (instant SD I/O)\n"
         "  --control <path>        Unix socket path for scripted control\n"
         "\n"
         "Controls:\n"
         "  Click on display   Tap touchscreen\n"
-        "  Tab                Toggle turbo mode\n"
         "  R                  Restart app\n"
         "  Q / Ctrl+C         Quit\n",
         prog);
@@ -1060,8 +1093,6 @@ int main(int argc, char *argv[])
             scale = atoi(argv[++i]);
             if (scale < 1) scale = 1;
             if (scale > 4) scale = 4;
-        } else if (strcmp(argv[i], "--turbo") == 0) {
-            emu_turbo_mode = 1;
         } else if (strcmp(argv[i], "--chip") == 0 && i + 1 < argc) {
             chip_override = argv[++i];
         } else if (strcmp(argv[i], "--no-sdcard") == 0) {
@@ -1152,7 +1183,7 @@ int main(int argc, char *argv[])
     }
 
     printf("\n");
-    printf("  CYD Emulator\n");
+    printf("  CYD Emulator v4\n");
     printf("  Board:   %s\n", active.model);
     printf("  Chip:    %s (%d cores)\n", active.chip_name, active.cores);
     printf("  Display: %s %dx%d\n", active.display_size, active.display_width, active.display_height);
@@ -1162,7 +1193,6 @@ int main(int argc, char *argv[])
     printf("  Mode:    flexe (Xtensa LX6 interpreter)\n");
     printf("  Firmware: %s\n", firmware_path);
     if (elf_path) printf("  ELF:     %s\n", elf_path);
-    printf("  Speed:   %s\n", emu_turbo_mode ? "turbo" : "normal (hardware-accurate)");
     if (control_path)
         printf("  Control: %s\n", control_path);
     printf("\n");
@@ -1320,9 +1350,7 @@ int main(int argc, char *argv[])
                     menu_hover = -1;
                     break;
                 }
-                if (ev.key.keysym.sym == SDLK_TAB) {
-                    emu_turbo_mode = !emu_turbo_mode;
-                } else if (ev.key.keysym.sym == SDLK_r && menu_open == MENU_CLOSED) {
+                if (ev.key.keysym.sym == SDLK_r && menu_open == MENU_CLOSED) {
                     if (app_thread_valid) do_restart_app();
                 } else if (ev.key.keysym.sym == SDLK_q && menu_open == MENU_CLOSED) {
                     emu_window_running = 0;
