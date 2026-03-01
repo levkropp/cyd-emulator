@@ -107,6 +107,7 @@ static SDL_Texture  *s_drop_tex;
 
 static int scale = 2;
 static int disp_w, disp_h, win_w, win_h;
+static int tex_w = DISPLAY_WIDTH, tex_h = DISPLAY_HEIGHT;
 
 /* ---- Mutable board profile ---- */
 static struct board_profile active;
@@ -662,23 +663,14 @@ static uint32_t *menu_pixels = NULL;
 
 static void update_layout(void)
 {
-    disp_w = DISPLAY_WIDTH * scale;
-    disp_h = DISPLAY_HEIGHT * scale;
+    disp_w = tex_w * scale;
+    disp_h = tex_h * scale;
     win_w = disp_w + PANEL_WIDTH;
     win_h = MENU_BAR_HEIGHT + disp_h;
 }
 
-static void resize_window(int new_scale)
+static void recreate_auxiliary_textures(void)
 {
-    if (new_scale < 1) new_scale = 1;
-    if (new_scale > 4) new_scale = 4;
-    if (new_scale == scale) return;
-
-    scale = new_scale;
-    update_layout();
-
-    SDL_SetWindowSize(s_window, win_w, win_h);
-
     /* Recreate panel texture (height changed) */
     if (s_panel_tex) SDL_DestroyTexture(s_panel_tex);
     s_panel_tex = SDL_CreateTexture(s_renderer,
@@ -697,6 +689,18 @@ static void resize_window(int new_scale)
 
     free(menu_pixels);
     menu_pixels = calloc((size_t)win_w * MENU_BAR_HEIGHT, sizeof(uint32_t));
+}
+
+static void resize_window(int new_scale)
+{
+    if (new_scale < 1) new_scale = 1;
+    if (new_scale > 4) new_scale = 4;
+    if (new_scale == scale) return;
+
+    scale = new_scale;
+    update_layout();
+    SDL_SetWindowSize(s_window, win_w, win_h);
+    recreate_auxiliary_textures();
 }
 
 /* ---- Save/Load state orchestration ---- */
@@ -1230,10 +1234,10 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    /* Display texture (always native resolution, SDL scales it) */
+    /* Display texture (native resolution, SDL scales it) */
     s_disp_tex = SDL_CreateTexture(s_renderer,
         SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING,
-        DISPLAY_WIDTH, DISPLAY_HEIGHT);
+        tex_w, tex_h);
 
     /* Panel texture */
     s_panel_tex = SDL_CreateTexture(s_renderer,
@@ -1365,9 +1369,27 @@ int main(int argc, char *argv[])
 
         /* ---- Render ---- */
 
+        /* Check if firmware changed display orientation */
+        if (emu_flexe_active()) {
+            int cur_w = emu_flexe_display_width();
+            int cur_h = emu_flexe_display_height();
+            if (cur_w != tex_w || cur_h != tex_h) {
+                tex_w = cur_w;
+                tex_h = cur_h;
+                SDL_DestroyTexture(s_disp_tex);
+                s_disp_tex = SDL_CreateTexture(s_renderer,
+                    SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING,
+                    tex_w, tex_h);
+                update_layout();
+                SDL_SetWindowSize(s_window, win_w, win_h);
+                recreate_auxiliary_textures();
+            }
+        }
+
         /* Convert RGB565 framebuffer to ARGB8888 */
+        int npix = tex_w * tex_h;
         pthread_mutex_lock(&emu_framebuf_mutex);
-        for (int i = 0; i < DISPLAY_WIDTH * DISPLAY_HEIGHT; i++) {
+        for (int i = 0; i < npix; i++) {
             uint16_t c = emu_framebuf[i];
             uint8_t r = ((c >> 11) & 0x1F) << 3;
             uint8_t g = ((c >> 5) & 0x3F) << 2;
@@ -1379,14 +1401,14 @@ int main(int argc, char *argv[])
         /* "Firmware stopped" overlay when app thread isn't running */
         if (!app_thread_valid) {
             /* Fill display with dark background */
-            for (int i = 0; i < DISPLAY_WIDTH * DISPLAY_HEIGHT; i++)
+            for (int i = 0; i < npix; i++)
                 disp_pixels[i] = 0xFF1A1A2E;
 
             const char *line1 = "Firmware stopped.";
             int len1 = (int)strlen(line1);
-            int x1 = (DISPLAY_WIDTH - len1 * FONT_WIDTH) / 2;
-            int y1 = DISPLAY_HEIGHT / 2 - FONT_HEIGHT / 2;
-            render_text(disp_pixels, DISPLAY_WIDTH, DISPLAY_HEIGHT,
+            int x1 = (tex_w - len1 * FONT_WIDTH) / 2;
+            int y1 = tex_h / 2 - FONT_HEIGHT / 2;
+            render_text(disp_pixels, tex_w, tex_h,
                         x1, y1, line1, 0xFFCCCCCC);
         }
 
@@ -1397,7 +1419,7 @@ int main(int argc, char *argv[])
         render_menu_bar(menu_pixels, win_w, MENU_BAR_HEIGHT);
 
         /* Update textures */
-        SDL_UpdateTexture(s_disp_tex, NULL, disp_pixels, DISPLAY_WIDTH * sizeof(uint32_t));
+        SDL_UpdateTexture(s_disp_tex, NULL, disp_pixels, tex_w * sizeof(uint32_t));
         SDL_UpdateTexture(s_panel_tex, NULL, panel_pixels, PANEL_WIDTH * sizeof(uint32_t));
         SDL_UpdateTexture(s_menu_tex, NULL, menu_pixels, win_w * sizeof(uint32_t));
 
