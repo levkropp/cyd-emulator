@@ -61,14 +61,15 @@
 - ✅ All 459 unit tests still pass
 
 **Task #22: Implement LVGL 7.x Compatibility Layer**
-- Add PC hooks for LVGL 7.x API (`lv_disp_flush_ready`)
-- Version detection logic
-- Backward compatibility testing
+- ✅ COMPLETED - Already implemented in Task #21
+- ✅ Both `lv_disp_flush_ready` (7.x) and `lv_display_flush_ready` (8.x/9.x) hooked
 
 **Task #23: ELF Symbol Auto-Detection for Flush Callbacks**
-- Scan ELF symbols for common flush callback patterns
-- Auto-register PC hooks for detected symbols
-- Implement fallback to TFT_eSPI interception
+- ✅ COMPLETED - Implemented wildcard symbol scanning
+- ✅ Added `elf_symbols_iterate()` API to flexe
+- ✅ Scans for patterns: `*_flush_cb`, `*_flush`, `*flush*` (with display keywords)
+- ✅ Auto-registers hooks for user-defined flush callbacks
+- ✅ All 459 unit tests pass
 
 **Task #24: Create LVGL Test Firmware Suite**
 - Build test-firmware/50-lvgl-basic (LVGL 7.x, 8.x, 9.x)
