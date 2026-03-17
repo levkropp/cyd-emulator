@@ -1,0 +1,41 @@
+Loaded 1358 symbols from test-firmware/10-freertos-minimal/build/freertos-minimal-test.elf
+Loaded test-firmware/10-freertos-minimal/build/freertos-minimal-test.bin: 5 segments, entry=0x4008116C
+  Segment 0: 0x3F400020 (37764 bytes) -> flash_data
+  Segment 1: 0x3FFB0000 (8304 bytes) -> sram_data
+  Segment 2: 0x40080000 (19444 bytes) -> sram_insn
+  Segment 3: 0x400D0020 (89904 bytes) -> flash_insn
+  Segment 4: 0x40084BF4 (24056 bytes) -> sram_insn
+[wifi] hooked 3 symbols (lwip + esp_wifi + events)
+[     20000] CORE1 started at 0x40080FE0
+[0;32mI (0) cpu_start: Multicore app[0m
+[0;32mI (0) cpu_start: Pro cpu up.[0m
+[0;32mI (0) cpu_start: Starting app cpu, entry point is 40080fe0[0m
+[0;32mI (0) cpu_start: App cpu up.[0m
+[0;32mI (0) cpu_start: Pro cpu start user code[0m
+[0;32mI (0) cpu_start: cpu freq: 160000000 Hz[0m
+[0;32mI (0) cpu_start: Application information:[0m
+[0;32mI (0) cpu_start: Project name:     freertos-minimal-test[0m
+[0;32mI (0) cpu_start: App version:      de02476-dirty[0m
+[0;32mI (0) cpu_start: Compile time:     Mar 17 2026 11:34:24[0m
+[0;32mI (0) cpu_start: ELF file SHA256:  903eec9339c61651...[0m
+[0;32mI (0) cpu_start: ESP-IDF:          v5.1.5-dirty[0m
+[0;32mI (0) cpu_start: Min chip rev:     v0.0[0m
+[0;32mI (0) cpu_start: Max chip rev:     v3.99 [0m
+[0;32mI (0) cpu_start: Chip rev:         v0.0[0m
+[0;32mI (0) heap_init: Initializing. RAM available for dynamic allocation:[0m
+[0;32mI (0) heap_init: At 3FFAE6E0 len 00001920 (6 KiB): [0m
+[0;32mI (0) heap_init: At 3FFB28F0 len 0002D710 (181 KiB): [0m
+[0;32mI (0) heap_init: At 3FFE0440 len 00003AE0 (14 KiB): [0m
+[0;32mI (0) heap_init: At 3FFE4350 len 0001BCB0 (111 KiB): [0m
+[0;32mI (0) heap_init: At 4008A9EC len 00015614 (85 KiB): [0m
+[0;32mI (0) app_start: Starting scheduler on CPU0[0m
+
+--- Execution summary ---
+Stop reason: max_cycles
+Cycles:     10000000 (virtual: 10000000)
+Final PC:   0x40086D40 (vTaskStartScheduler)
+Core 1 PC:  0x400D4CE8 (task1+0x64)
+UART TX:    1279 bytes
+ROM calls:  ets_printf x22, ets_delay_us x2052, Cache_Read_Enable x1, Cache_Read_Disable x1, Cache_Flush x2, ets_efuse_get_spiconfig x6, memcpy x10, memset x8, ets_set_appcpu_boot_addr x2, rtc_get_reset_reason x4, ets_install_uart_printf x1, __popcountsi2 x3, __udivdi3 x5, rom_i2c_writeReg x10, intr_matrix_set x138, uart_tx_switch x1, gpio_matrix_in x4, mmu_init x1, qsort x1, __ashldi3 x6, spi_flash_clk_cfg x2, spi_flash_attach x5, _xtos_set_intlevel x28, malloc x1, esp_get_free_heap_size x2, esp_log_timestamp x50, esp_flash_init_default_chip x1, spi_flash_init_chip_state x1, esp_chip_info x1, esp_log_write x28, startup_resume_other_cores x1, do_system_init_fn x2, esp_register_freertos_idle_hook_for_cpu x1, esp_vfs_console_register x1, esp_newlib_init x1, __getreent x6, esp_newlib_time_init x1, esp_timer_impl_early_init x1, esp_timer_impl_init_system_time x1, esp_int_wdt_init x1, esp_int_wdt_cpu_init x1, esp_task_wdt_init x1, esp_crosscore_int_init x1, esp_cache_err_int_init x2, esp_brownout_init x1, vTaskDelay x8, xTaskCreatePinnedToCore x5, vTaskDelete x3, xQueueGenericSend x2, xQueueCreateMutex x2, xQueueGenericReset x4, xPortEnterCriticalTimeout x16, vPortExitCritical x16, vTaskStartScheduler x9967656, esp_startup_start_app_other_cores x1
+Unregistered ROM calls: 3
+Unhandled:  4100 peripheral accesses

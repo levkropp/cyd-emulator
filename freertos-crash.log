@@ -1,0 +1,22 @@
+[0;32mI (0) cpu_start: Multicore app[0m
+[0;32mI (0) cpu_start: Pro cpu up.[0m
+[0;32mI (0) cpu_start: Starting app cpu, entry point is 40081070[0m
+[0;32mI (0) cpu_start: App cpu up.[0m
+[0;32mI (0) cpu_start: Pro cpu start user code[0m
+[0;32mI (0) cpu_start: cpu freq: 160000000 Hz[0m
+[0;32mI (0) cpu_start: Application information:[0m
+[0;32mI (0) cpu_start: Project name:     lvgl-basic-test[0m
+[0;32mI (0) cpu_start: App version:      4ce85a4-dirty[0m
+[0;32mI (0) cpu_start: Compile time:     Mar 17 2026 11:24:11[0m
+[0;32mI (0) cpu_start: ELF file SHA256:  4571265c7ec2fdc6...[0m
+[0;32mI (0) cpu_start: ESP-IDF:          v5.1.5-dirty[0m
+[0;32mI (0) cpu_start: Min chip rev:     v0.0[0m
+[0;32mI (0) cpu_start: Max chip rev:     v3.99 [0m
+[0;32mI (0) cpu_start: Chip rev:         v0.0[0m
+[0;32mI (0) heap_init: Initializing. RAM available for dynamic allocation:[0m
+[0;32mI (0) heap_init: At 3FFAE6E0 len 00001920 (6 KiB): [0m
+[0;32mI (0) heap_init: At 3FFC7658 len 000189A8 (98 KiB): [0m
+[0;32mI (0) heap_init: At 3FFE0440 len 00003AE0 (14 KiB): [0m
+[0;32mI (0) heap_init: At 3FFE4350 len 0001BCB0 (111 KiB): [0m
+[0;32mI (0) heap_init: At 4008AAEC len 00015514 (85 KiB): [0m
+[0;32mI (0) app_start: Starting scheduler on CPU0[0m
