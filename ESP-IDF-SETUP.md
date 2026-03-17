@@ -21,14 +21,16 @@ Complete guide for building ESP32 firmware for testing in cyd-emulator.
 # Navigate to project
 cd C:\Users\26200.7462\cyd-emulator\test-firmware\50-lvgl-basic
 
-# Activate ESP-IDF environment
-C:\Users\26200.7462\esp\esp-idf\.venv\Scripts\activate.ps1
-$env:IDF_PATH="C:\Users\26200.7462\esp\esp-idf"
-
-# Build
-python $env:IDF_PATH\tools\idf.py set-target esp32
-python $env:IDF_PATH\tools\idf.py build
+# Run build script (handles environment setup automatically)
+.\build.ps1
 ```
+
+The build script automatically:
+- Activates Python 3.11 venv
+- Sets up ESP-IDF paths
+- Removes MSYSTEM if present
+- Configures ESP32 target
+- Builds the firmware
 
 ### Output Files
 

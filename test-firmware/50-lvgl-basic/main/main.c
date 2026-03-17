@@ -65,7 +65,7 @@ void app_main(void)
     lv_obj_t *label_title = lv_label_create(scr);
     lv_label_set_text(label_title, "LVGL Test");
     lv_obj_set_style_text_color(label_title, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(label_title, &lv_font_montserrat_24, 0);
+    // Using montserrat_14 (default font) instead of montserrat_24
     lv_obj_align(label_title, LV_ALIGN_TOP_MID, 0, 20);
 
     // Create subtitle
