@@ -10,6 +10,10 @@
  * An info panel is rendered to the right of the display.
  */
 
+#ifdef _MSC_VER
+#include "../flexe/src/msvc_compat.h"
+#endif
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -18,7 +22,9 @@
 #include <pthread.h>
 #include <time.h>
 #include <sys/stat.h>
+#ifndef _MSC_VER
 #include <unistd.h>
+#endif
 
 #include <SDL2/SDL.h>
 

@@ -4,6 +4,10 @@
 #ifndef ESP_SYSTEM_H
 #define ESP_SYSTEM_H
 
+#ifdef _MSC_VER
+#include "../flexe/src/msvc_compat.h"
+#endif
+
 #include <stdint.h>
 #include "esp_log.h"  /* for esp_err_t */
 

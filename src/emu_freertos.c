@@ -11,11 +11,17 @@
  * - Timer callbacks run in a dedicated timer thread (like FreeRTOS daemon)
  */
 
+#ifdef _MSC_VER
+#include "../flexe/src/msvc_compat.h"
+#endif
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <pthread.h>
+#ifndef _MSC_VER
 #include <unistd.h>
+#endif
 #include <time.h>
 #include <errno.h>
 

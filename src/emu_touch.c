@@ -8,13 +8,19 @@
  * Logs all touch events to the console panel ring buffer.
  */
 
+#ifdef _MSC_VER
+#include "../flexe/src/msvc_compat.h"
+#endif
+
 #include "touch.h"
 #include "esp_log.h"
 
 #include <stdio.h>
 #include <stdarg.h>
 #include <pthread.h>
+#ifndef _MSC_VER
 #include <unistd.h>
+#endif
 
 static const char *TAG = "touch";
 

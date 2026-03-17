@@ -8,12 +8,18 @@
  * timing (20 MHz SPI3 host) unless turbo mode is enabled.
  */
 
+#ifdef _MSC_VER
+#include "../flexe/src/msvc_compat.h"
+#endif
+
 #include "sdcard.h"
 #include "esp_log.h"
 
 #include <stdio.h>
 #include <string.h>
+#ifndef _MSC_VER
 #include <unistd.h>
+#endif
 #include <time.h>
 
 static const char *TAG = "emu_sdcard";

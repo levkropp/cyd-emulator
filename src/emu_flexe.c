@@ -6,6 +6,10 @@
  * SDL touch bridge, debug pause/continue.
  */
 
+#ifdef _MSC_VER
+#include "../flexe/src/msvc_compat.h"
+#endif
+
 #include "emu_flexe.h"
 #include "flexe_session.h"
 #include "display_stubs.h"
@@ -15,7 +19,9 @@
 
 #include <stdio.h>
 #include <string.h>
+#ifndef _MSC_VER
 #include <unistd.h>
+#endif
 #include <time.h>
 #include <pthread.h>
 

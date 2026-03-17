@@ -14,6 +14,10 @@
  *   quit                Clean shutdown
  */
 
+#ifdef _MSC_VER
+#include "../flexe/src/msvc_compat.h"
+#endif
+
 #include "emu_control.h"
 #include "display.h"
 #include "emu_flexe.h"
@@ -25,14 +29,18 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifndef _MSC_VER
 #include <unistd.h>
+#endif
 #include <errno.h>
 #include <fcntl.h>
 #include <pthread.h>
 
+#ifndef _MSC_VER
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <sys/time.h>
+#endif
 
 #include <SDL2/SDL.h>
 
@@ -46,6 +54,23 @@ extern const struct board_profile *emu_active_board;
 #define EMU_LOG_LINES 64
 extern char emu_log_ring[][48];
 extern int  emu_log_head;
+
+#ifdef _MSC_VER
+/* Windows stubs - control socket not supported on Windows */
+int emu_control_init(const char *socket_path) {
+    (void)socket_path;
+    return -1;  /* Not supported */
+}
+
+void emu_control_poll(void) {
+    /* No-op on Windows */
+}
+
+void emu_control_shutdown(void) {
+    /* No-op on Windows */
+}
+
+#else  /* Unix implementation follows */
 
 static int listen_fd = -1;
 static char sock_path[108]; /* match sun_path size */
@@ -603,3 +628,5 @@ void emu_control_shutdown(void)
         sock_path[0] = '\0';
     }
 }
+
+#endif  /* _MSC_VER */

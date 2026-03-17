@@ -5,8 +5,12 @@ project(cyd-emulator C)
 add_subdirectory(flexe)
 
 # Find SDL2
-find_package(PkgConfig REQUIRED)
-pkg_check_modules(SDL2 REQUIRED sdl2)
+if(MSVC)
+    find_package(SDL2 CONFIG REQUIRED)
+else()
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(SDL2 REQUIRED sdl2)
+endif()
 
 # Emulator sources
 set(EMU_SOURCES
@@ -30,24 +34,38 @@ add_executable(cyd-emulator ${EMU_SOURCES})
 
 target_include_directories(cyd-emulator PRIVATE
     ${CMAKE_SOURCE_DIR}/include
-    ${SDL2_INCLUDE_DIRS}
 )
 
-target_link_libraries(cyd-emulator PRIVATE
-    ${SDL2_LIBRARIES}
-    pthread
-    xtensa-emu-lib
-)
-
-target_compile_options(cyd-emulator PRIVATE
-    -Wall -Wextra -Wno-unused-parameter
-    ${SDL2_CFLAGS_OTHER}
-)
-
-# Need _GNU_SOURCE for ftruncate, fseeko, etc.
-target_compile_definitions(cyd-emulator PRIVATE
-    _GNU_SOURCE
-    EMU_USE_FLEXE
-    EMU_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
-    EMU_BUILD_DIR="${CMAKE_BINARY_DIR}"
-)
+if(MSVC)
+    target_include_directories(cyd-emulator PRIVATE ${SDL2_INCLUDE_DIRS})
+    target_link_libraries(cyd-emulator PRIVATE
+        SDL2::SDL2
+        SDL2::SDL2main
+        xtensa-emu-lib
+    )
+    target_compile_options(cyd-emulator PRIVATE /W4 /wd4100)
+    target_compile_definitions(cyd-emulator PRIVATE
+        _CRT_SECURE_NO_WARNINGS
+        EMU_USE_FLEXE
+        EMU_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+        EMU_BUILD_DIR="${CMAKE_BINARY_DIR}"
+    )
+else()
+    target_include_directories(cyd-emulator PRIVATE ${SDL2_INCLUDE_DIRS})
+    find_package(pthreads REQUIRED)
+    target_link_libraries(cyd-emulator PRIVATE
+        ${SDL2_LIBRARIES}
+        pthread
+        xtensa-emu-lib
+    )
+    target_compile_options(cyd-emulator PRIVATE
+        -Wall -Wextra -Wno-unused-parameter
+        ${SDL2_CFLAGS_OTHER}
+    )
+    target_compile_definitions(cyd-emulator PRIVATE
+        _GNU_SOURCE
+        EMU_USE_FLEXE
+        EMU_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+        EMU_BUILD_DIR="${CMAKE_BINARY_DIR}"
+    )
+endif()

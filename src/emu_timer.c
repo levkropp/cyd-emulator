@@ -6,6 +6,10 @@
  * Uses CLOCK_MONOTONIC for timing.
  */
 
+#ifdef _MSC_VER
+#include "../flexe/src/msvc_compat.h"
+#endif
+
 #include <stdlib.h>
 #include <string.h>
 #include <pthread.h>
