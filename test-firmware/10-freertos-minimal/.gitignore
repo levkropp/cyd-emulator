@@ -1,0 +1,7 @@
+# ESP-IDF build artifacts
+build/
+dependencies.lock
+
+# sdkconfig files
+sdkconfig
+sdkconfig.old
