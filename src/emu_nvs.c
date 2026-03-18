@@ -8,6 +8,10 @@
  * Simple and correct, not optimized for large datasets.
  */
 
+#ifdef _MSC_VER
+#include "../flexe/src/msvc_compat.h"
+#endif
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -63,11 +67,19 @@ static struct nvs_namespace *get_ns(nvs_handle_t handle)
 
 /* ---- Directory setup ---- */
 
-static void ensure_nvs_dir(void)
+static const char *get_home_dir(void)
 {
     const char *home = getenv("HOME");
+#ifdef _WIN32
+    if (!home) home = getenv("USERPROFILE");
+#endif
     if (!home) home = "/tmp";
+    return home;
+}
 
+static void ensure_nvs_dir(void)
+{
+    const char *home = get_home_dir();
     char dir[512];
     snprintf(dir, sizeof(dir), "%s/.cyd-emulator", home);
     mkdir(dir, 0755);
@@ -77,8 +89,7 @@ static void ensure_nvs_dir(void)
 
 static void ns_filepath(const char *namespace_name, char *buf, size_t bufsize)
 {
-    const char *home = getenv("HOME");
-    if (!home) home = "/tmp";
+    const char *home = get_home_dir();
     snprintf(buf, bufsize, "%s/.cyd-emulator/nvs/%s.nvs", home, namespace_name);
 }
 

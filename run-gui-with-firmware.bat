@@ -1,7 +1,7 @@
 @echo off
 echo Starting CYD Emulator GUI with LVGL test firmware...
 echo.
-cd /d "C:\Users\26200.7462\cyd-emulator\build\Release"
+cd /d "%~dp0build\Release"
 
 set FIRMWARE=..\..\test-firmware\50-lvgl-basic\build\lvgl-basic-test.bin
 set ELF=..\..\test-firmware\50-lvgl-basic\build\lvgl-basic-test.elf

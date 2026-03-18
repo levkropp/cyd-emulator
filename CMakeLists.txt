@@ -43,7 +43,7 @@ if(MSVC)
         SDL2::SDL2main
         xtensa-emu-lib
     )
-    target_compile_options(cyd-emulator PRIVATE /W4 /wd4100)
+    target_compile_options(cyd-emulator PRIVATE /W4 /wd4100 /wd4244 /wd4267)
     target_compile_definitions(cyd-emulator PRIVATE
         _CRT_SECURE_NO_WARNINGS
         EMU_USE_FLEXE
@@ -52,10 +52,8 @@ if(MSVC)
     )
 else()
     target_include_directories(cyd-emulator PRIVATE ${SDL2_INCLUDE_DIRS})
-    find_package(pthreads REQUIRED)
     target_link_libraries(cyd-emulator PRIVATE
         ${SDL2_LIBRARIES}
-        pthread
         xtensa-emu-lib
     )
     target_compile_options(cyd-emulator PRIVATE

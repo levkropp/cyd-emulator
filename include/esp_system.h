@@ -11,6 +11,13 @@
 #include <stdint.h>
 #include "esp_log.h"  /* for esp_err_t */
 
+/* Portable noreturn attribute */
+#ifdef _MSC_VER
+#define ESP_NORETURN __declspec(noreturn)
+#else
+#define ESP_NORETURN __attribute__((noreturn))
+#endif
+
 typedef enum {
     ESP_RST_UNKNOWN   = 0,
     ESP_RST_POWERON   = 1,
@@ -25,7 +32,7 @@ typedef enum {
 } esp_reset_reason_t;
 
 esp_reset_reason_t esp_reset_reason(void);
-void esp_restart(void) __attribute__((noreturn));
+ESP_NORETURN void esp_restart(void);
 uint32_t esp_get_free_heap_size(void);
 uint32_t esp_get_minimum_free_heap_size(void);
 
