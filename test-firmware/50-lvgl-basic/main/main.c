@@ -8,6 +8,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "lvgl.h"
 
 static const char *TAG = "LVGL-TEST";
@@ -21,13 +22,18 @@ static lv_disp_draw_buf_t disp_buf;
 static lv_color_t buf1[DISP_HOR_RES * 40];  // 40 line buffer
 static lv_color_t buf2[DISP_HOR_RES * 40];  // Double buffering
 
+// LVGL tick timer callback — called every 1ms to advance LVGL's internal clock
+static void lv_tick_timer_cb(void *arg)
+{
+    (void)arg;
+    lv_tick_inc(1);
+}
+
 // Flush callback - called by LVGL to transfer framebuffer to display
 static void my_disp_flush(lv_disp_drv_t *disp_drv, const lv_area_t *area, lv_color_t *color_p)
 {
-    ESP_LOGI(TAG, "Flush: x1=%d y1=%d x2=%d y2=%d", area->x1, area->y1, area->x2, area->y2);
-
     // In real hardware, this would send data to TFT_eSPI
-    // In emulator, our stub will intercept this and copy to framebuffer
+    // In emulator, our spy stub intercepts this and copies to framebuffer
 
     // Signal LVGL that flushing is done
     lv_disp_flush_ready(disp_drv);
@@ -40,6 +46,15 @@ void app_main(void)
 
     // Initialize LVGL
     lv_init();
+
+    // Start LVGL tick timer (1ms period) — required for LVGL time tracking
+    const esp_timer_create_args_t tick_timer_args = {
+        .callback = lv_tick_timer_cb,
+        .name = "lv_tick"
+    };
+    esp_timer_handle_t tick_timer;
+    esp_timer_create(&tick_timer_args, &tick_timer);
+    esp_timer_start_periodic(tick_timer, 1000);  // 1ms = 1000us
 
     // Initialize display buffer
     lv_disp_draw_buf_init(&disp_buf, buf1, buf2, DISP_HOR_RES * 40);
@@ -65,7 +80,6 @@ void app_main(void)
     lv_obj_t *label_title = lv_label_create(scr);
     lv_label_set_text(label_title, "LVGL Test");
     lv_obj_set_style_text_color(label_title, lv_color_hex(0xFFFFFF), 0);
-    // Using montserrat_14 (default font) instead of montserrat_24
     lv_obj_align(label_title, LV_ALIGN_TOP_MID, 0, 20);
 
     // Create subtitle
@@ -88,6 +102,7 @@ void app_main(void)
 
     // LVGL task loop
     while (1) {
+        lv_tick_inc(10);  // Advance LVGL time by 10ms per iteration
         lv_task_handler();
         vTaskDelay(pdMS_TO_TICKS(10));
     }
