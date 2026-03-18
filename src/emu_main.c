@@ -1032,10 +1032,10 @@ static uint64_t parse_size(const char *s)
 static void usage(const char *prog)
 {
     fprintf(stderr,
-        "Usage: %s --firmware <file.bin> [options]\n"
+        "Usage: %s [--firmware <file.bin>] [options]\n"
         "\n"
         "Firmware:\n"
-        "  --firmware <file.bin>   ESP32 firmware binary (required)\n"
+        "  --firmware <file.bin>   ESP32 firmware binary (or load via File menu)\n"
         "  --elf <file.elf>        ELF file for symbol hooking (optional)\n"
         "\n"
         "Board selection:\n"
@@ -1181,15 +1181,14 @@ int main(int argc, char *argv[])
     emu_chip_cores = active.cores;
     emu_sdcard_enabled = (active.sd_slots > 0) ? 1 : 0;
 
-    /* Firmware is required */
-    if (!firmware_path) {
-        fprintf(stderr, "Error: --firmware is required.\n\n");
-        usage(argv[0]);
-        return 1;
-    }
-    if (emu_flexe_init(firmware_path, elf_path) != 0) {
-        fprintf(stderr, "Failed to load firmware: %s\n", firmware_path);
-        return 1;
+    /* Load firmware if provided, otherwise start GUI without it */
+    int firmware_loaded = 0;
+    if (firmware_path) {
+        if (emu_flexe_init(firmware_path, elf_path) != 0) {
+            fprintf(stderr, "Failed to load firmware: %s\n", firmware_path);
+            return 1;
+        }
+        firmware_loaded = 1;
     }
 
     printf("\n");
@@ -1201,7 +1200,10 @@ int main(int argc, char *argv[])
     printf("  SD:      %d slot(s)\n", active.sd_slots);
     printf("  USB:     %s\n", active.usb_type);
     printf("  Mode:    flexe (Xtensa LX6 interpreter)\n");
-    printf("  Firmware: %s\n", firmware_path);
+    if (firmware_path)
+        printf("  Firmware: %s\n", firmware_path);
+    else
+        printf("  Firmware: (none — use File > Load Firmware)\n");
     if (elf_path) printf("  ELF:     %s\n", elf_path);
     if (control_path)
         printf("  Control: %s\n", control_path);
@@ -1277,11 +1279,13 @@ int main(int argc, char *argv[])
             fprintf(stderr, "Warning: failed to create control socket %s\n", control_path);
     }
 
-    /* Start the app thread (firmware already loaded) */
-    if (start_app_thread() != 0) {
-        emu_flexe_shutdown();
-        SDL_Quit();
-        return 1;
+    /* Start the app thread if firmware was loaded */
+    if (firmware_loaded) {
+        if (start_app_thread() != 0) {
+            emu_flexe_shutdown();
+            SDL_Quit();
+            return 1;
+        }
     }
 
     /* Pixel buffers */
@@ -1404,18 +1408,28 @@ int main(int argc, char *argv[])
         }
         pthread_mutex_unlock(&emu_framebuf_mutex);
 
-        /* "Firmware stopped" overlay when app thread isn't running */
+        /* Overlay when app thread isn't running */
         if (!app_thread_valid) {
             /* Fill display with dark background */
             for (int i = 0; i < npix; i++)
                 disp_pixels[i] = 0xFF1A1A2E;
 
-            const char *line1 = "Firmware stopped.";
+            const char *line1 = firmware_path
+                ? "Firmware stopped."
+                : "No firmware loaded.";
+            const char *line2 = firmware_path
+                ? "File > Restart to relaunch."
+                : "File > Load Firmware to begin.";
             int len1 = (int)strlen(line1);
+            int len2 = (int)strlen(line2);
             int x1 = (tex_w - len1 * FONT_WIDTH) / 2;
-            int y1 = tex_h / 2 - FONT_HEIGHT / 2;
+            int x2 = (tex_w - len2 * FONT_WIDTH) / 2;
+            int y1 = tex_h / 2 - FONT_HEIGHT;
+            int y2 = tex_h / 2 + 2;
             render_text(disp_pixels, tex_w, tex_h,
                         x1, y1, line1, 0xFFCCCCCC);
+            render_text(disp_pixels, tex_w, tex_h,
+                        x2, y2, line2, 0xFF888888);
         }
 
         /* Render info panel */
