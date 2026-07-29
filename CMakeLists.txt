@@ -52,6 +52,7 @@ if(MSVC)
     )
 else()
     target_include_directories(cyd-emulator PRIVATE ${SDL2_INCLUDE_DIRS})
+    target_link_directories(cyd-emulator PRIVATE ${SDL2_LIBRARY_DIRS})
     target_link_libraries(cyd-emulator PRIVATE
         ${SDL2_LIBRARIES}
         xtensa-emu-lib

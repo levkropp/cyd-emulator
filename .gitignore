@@ -1,2 +1,6 @@
 build/
 *.img
+test-results-*/
+test-firmware/*/build/
+test-firmware/popular/*/*.bin
+*.old

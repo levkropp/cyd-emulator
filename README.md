@@ -15,6 +15,22 @@ cmake -S . -B build && cmake --build build
 
 The `--firmware` flag is required. The `--elf` flag is optional but enables symbol-based function hooking (ROM stubs, FreeRTOS, display/touch/SD drivers).
 
+## Popular firmware
+
+Download ready-made CYD binaries (ESP32 Marauder, NerdMiner v2):
+
+```bash
+test-firmware/popular/download.sh   # requires gh CLI
+```
+
+Current status (see flexe commit `3b03c6a` for the flash/ROM fixes):
+
+- **ESP32 Marauder** (`cyd_2432S028.bin`): boots past flash probing and GPIO setup, then stalls in ESP-IDF SMP startup (cross-core IPC deadlock under emulation). Boots, but not usable yet.
+- **NerdMiner v2** (`ESP32-2432S028R_factory.bin`): boots and runs its main loop, but the screen stays black — it bit-bangs the ILI9341 through raw SPI2 register writes, which are not yet captured (display hooks need an ELF with symbols).
+
+These are emulator gaps, not firmware problems; raw-SPI display capture and SMP IPC are on the list. Firmware built from source with an ELF available (e.g. `test-firmware/50-lvgl-basic`) works fully, display included.
+
+
 ## What it does
 
 - Interprets ESP32 firmware binaries through a cycle-level Xtensa LX6 emulator

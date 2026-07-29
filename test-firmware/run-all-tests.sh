@@ -5,7 +5,14 @@
 set -e
 
 MODE="${1:-standard}"
-FLEXE="../flexe/build/Release/xtensa-emu.exe"
+# flexe standalone emulator: prefer in-repo submodule build, fall back to Windows path
+if [ -x "../flexe/build/xtensa-emu" ]; then
+    FLEXE="../flexe/build/xtensa-emu"
+elif [ -x "../build/flexe/xtensa-emu" ]; then
+    FLEXE="../build/flexe/xtensa-emu"
+else
+    FLEXE="../flexe/build/Release/xtensa-emu.exe"
+fi
 TEST_DIR="10-freertos-minimal"
 FIRMWARE="$TEST_DIR/build/freertos-minimal-test.bin"
 ELF="$TEST_DIR/build/freertos-minimal-test.elf"
