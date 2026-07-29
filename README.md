@@ -23,12 +23,17 @@ Download ready-made CYD binaries (ESP32 Marauder, NerdMiner v2):
 test-firmware/popular/download.sh   # requires gh CLI
 ```
 
-Current status (see flexe commit `3b03c6a` for the flash/ROM fixes):
+Current status:
 
-- **ESP32 Marauder** (`cyd_2432S028.bin`): boots past flash probing and GPIO setup, then stalls in ESP-IDF SMP startup (cross-core IPC deadlock under emulation). Boots, but not usable yet.
-- **NerdMiner v2** (`ESP32-2432S028R_factory.bin`): boots and runs its main loop, but the screen stays black — it bit-bangs the ILI9341 through raw SPI2 register writes, which are not yet captured (display hooks need an ELF with symbols).
+- **ESP32 Marauder** (`cyd_2432S028.bin`): boots through flash probing, GPIO setup and SD init, then stalls in ESP-IDF (4.4) SMP startup — a deterministic FreeRTOS kernel list corruption under dual-core emulation. Not usable yet; root cause under investigation.
+- **NerdMiner v2** (`ESP32-2432S028R_factory.bin`): boots, SD card mounts over raw SPI, then hits the same SMP stall before `setup()` runs.
 
-These are emulator gaps, not firmware problems; raw-SPI display capture and SMP IPC are on the list. Firmware built from source with an ELF available (e.g. `test-firmware/50-lvgl-basic`) works fully, display included.
+What works today:
+
+- **Raw SPI device capture** (flexe `4f9ce5d`): ILI9341 display, XPT2046 touch and SDHC card are emulated at the SPI2/SPI3 register level, so symbol-less firmware (no ELF) drives real peripherals. `test-firmware/60-spi-display` renders color fills end-to-end through it.
+- Firmware built from source with an ELF available (e.g. `test-firmware/50-lvgl-basic`) works fully, display included, via the symbol-hook path.
+- `run-all-tests.sh` (FreeRTOS single/dual-core): 6/6 pass.
+
 
 
 ## What it does
