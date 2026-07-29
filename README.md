@@ -23,16 +23,15 @@ Download ready-made CYD binaries (ESP32 Marauder, NerdMiner v2):
 test-firmware/popular/download.sh   # requires gh CLI
 ```
 
-Current status:
+Current status (flexe `c1148ef`):
 
-- **ESP32 Marauder** (`cyd_2432S028.bin`): boots through flash probing, GPIO setup and SD init, then stalls in ESP-IDF (4.4) SMP startup — a deterministic FreeRTOS kernel list corruption under dual-core emulation. Not usable yet; root cause under investigation.
-- **NerdMiner v2** (`ESP32-2432S028R_factory.bin`): boots, SD card mounts over raw SPI, then hits the same SMP stall before `setup()` runs.
+- **ESP32 Marauder** (`cyd_2432S028.bin`) and **NerdMiner v2** (`ESP32-2432S028R_factory.bin`): both boot deep into Arduino init with a fully working SMP scheduler (context switches, per-core ticks, cross-core yields), SD card mounts over raw SPI — then `main_task` stalls before `setup()` runs (an esp_ipc/semaphore wait that never completes on this IDF 4.4 startup path). Not usable yet; this is the last known blocker and is under active investigation.
 
 What works today:
 
-- **Raw SPI device capture** (flexe `4f9ce5d`): ILI9341 display, XPT2046 touch and SDHC card are emulated at the SPI2/SPI3 register level, so symbol-less firmware (no ELF) drives real peripherals. `test-firmware/60-spi-display` renders color fills end-to-end through it.
+- **Raw SPI device capture** (flexe `4f9ce5d`): ILI9341 display, XPT2046 touch and SDHC card emulated at the SPI2/SPI3 register level. `test-firmware/60-spi-display` renders color fills end-to-end; `test-firmware/70-nvs-ipc` does NVS writes through the flash-op IPC handshake successfully.
 - Firmware built from source with an ELF available (e.g. `test-firmware/50-lvgl-basic`) works fully, display included, via the symbol-hook path.
-- `run-all-tests.sh` (FreeRTOS single/dual-core): 6/6 pass.
+- `run-all-tests.sh` (FreeRTOS single/dual-core): 6/6 pass. flexe's own suite: 468/468.
 
 
 

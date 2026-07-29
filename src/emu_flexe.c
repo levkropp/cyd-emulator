@@ -149,11 +149,13 @@ void emu_flexe_run(void)
             continue;
         }
 
-        /* If halted (WAITI), sleep briefly and poll for debug/interrupts */
+        /* If halted (WAITI), run full halt-step batches on both cores so
+         * virtual time (and timers) advance quickly, then yield the host
+         * briefly to keep the UI responsive. */
         if (cpu->halted) {
-            usleep(1000);
-            /* Try one step to check for pending interrupts */
-            xtensa_step(cpu);
+            xtensa_run(cpu, 10000);
+            flexe_session_post_batch(session, 10000);
+            usleep(100);
             continue;
         }
 
