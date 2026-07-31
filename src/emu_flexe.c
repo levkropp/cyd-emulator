@@ -227,6 +227,13 @@ uint32_t emu_flexe_mem_read32(uint32_t addr)
     return mem ? mem_read32(mem, addr) : 0;
 }
 
+void emu_flexe_mem_write32(uint32_t addr, uint32_t val)
+{
+    if (!flexe_active) return;
+    xtensa_mem_t *mem = flexe_session_mem(session);
+    if (mem) mem_write32(mem, addr, val);
+}
+
 uint8_t emu_flexe_mem_read8(uint32_t addr)
 {
     if (!flexe_active) return 0;
@@ -244,6 +251,16 @@ uint16_t emu_flexe_mem_read16(uint32_t addr)
 xtensa_cpu_t *emu_flexe_get_cpu(void)
 {
     return flexe_active ? flexe_session_cpu(session, 0) : NULL;
+}
+
+xtensa_cpu_t *emu_flexe_get_cpu_n(int core)
+{
+    return flexe_active ? flexe_session_cpu(session, core) : NULL;
+}
+
+void *emu_flexe_get_periph(void)
+{
+    return flexe_active ? (void *)flexe_session_periph(session) : NULL;
 }
 
 xtensa_mem_t *emu_flexe_get_mem(void)

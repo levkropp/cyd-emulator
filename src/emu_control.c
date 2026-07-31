@@ -25,6 +25,7 @@
 
 #include "xtensa.h"
 #include "memory.h"
+#include "peripherals.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -480,6 +481,49 @@ static void handle_regs(int fd)
     send_str(fd, "OK\n");
 }
 
+static void handle_periph(int fd)
+{
+    if (!emu_flexe_active()) {
+        send_str(fd, "ERR flexe not active\n");
+        return;
+    }
+    if (!emu_flexe_debug_paused()) {
+        send_str(fd, "ERR not paused\n");
+        return;
+    }
+    esp32_periph_t *p = (esp32_periph_t *)emu_flexe_get_periph();
+    char line[256];
+
+    for (int core = 0; core < 2; core++) {
+        xtensa_cpu_t *cpu = emu_flexe_get_cpu_n(core);
+        if (!cpu || !cpu->pc) continue;
+        snprintf(line, sizeof(line),
+                 "CPU%d pc=0x%08X ps=0x%08X intlvl=%u intenable=0x%08X interrupt=0x%08X halted=%d\n",
+                 core, cpu->pc, cpu->ps, cpu->ps & 0xF,
+                 cpu->intenable, cpu->interrupt, cpu->halted ? 1 : 0);
+        send_str(fd, line);
+        snprintf(line, sizeof(line),
+                 "CPU%d ccount=0x%08X ccompare=[0x%08X 0x%08X 0x%08X] cycles=%llu\n",
+                 core, cpu->ccount, cpu->ccompare[0], cpu->ccompare[1],
+                 cpu->ccompare[2], (unsigned long long)cpu->cycle_count);
+        send_str(fd, line);
+    }
+
+    if (p) {
+        for (int core = 0; core < 2; core++) {
+            int pos = snprintf(line, sizeof(line), "MTX%d:", core);
+            for (int ci = 0; ci < 32; ci++) {
+                int src = periph_intr_matrix_get(p, core, ci);
+                if (src != 16 && src != 0)
+                    pos += snprintf(line + pos, sizeof(line) - pos, " int%d<-src%d", ci, src);
+            }
+            snprintf(line + pos, sizeof(line) - pos, "\n");
+            send_str(fd, line);
+        }
+    }
+    send_str(fd, "OK\n");
+}
+
 static void handle_memdump(int fd, const char *args)
 {
     if (!emu_flexe_active()) {
@@ -590,6 +634,16 @@ void emu_control_poll(void)
         char resp[64];
         snprintf(resp, sizeof(resp), "OK 0x%08X = 0x%08X (%u)\n", addr, val, val);
         send_str(client, resp);
+    } else if (strncmp(buf, "poke ", 5) == 0) {
+        uint32_t addr = 0, val = 0;
+        if (sscanf(buf + 5, "%i %i", &addr, &val) == 2) {
+            emu_flexe_mem_write32(addr, val);
+            char resp[64];
+            snprintf(resp, sizeof(resp), "OK 0x%08X <- 0x%08X\n", addr, val);
+            send_str(client, resp);
+        } else {
+            send_str(client, "ERR usage: poke <addr> <val>\n");
+        }
     } else if (strncmp(buf, "break ", 6) == 0) {
         handle_break(client, buf + 6);
     } else if (strncmp(buf, "clearbreak ", 11) == 0) {
@@ -604,6 +658,8 @@ void emu_control_poll(void)
         handle_step(client, buf + 4);
     } else if (strcmp(buf, "regs") == 0) {
         handle_regs(client);
+    } else if (strcmp(buf, "periph") == 0) {
+        handle_periph(client);
     } else if (strncmp(buf, "memdump ", 8) == 0) {
         handle_memdump(client, buf + 8);
     } else if (strncmp(buf, "disasm ", 7) == 0) {
