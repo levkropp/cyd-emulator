@@ -435,7 +435,7 @@ static void handle_step(int fd, const char *args)
     send_str(fd, line);
 }
 
-static void handle_regs(int fd)
+static void handle_regs(int fd, const char *args)
 {
     if (!emu_flexe_active()) {
         send_str(fd, "ERR flexe not active\n");
@@ -446,7 +446,19 @@ static void handle_regs(int fd)
         return;
     }
 
-    xtensa_cpu_t *cpu = emu_flexe_get_cpu();
+    /* Optional core index: "regs" (current core) or "regs 0" / "regs 1". */
+    int core = -1;
+    if (args) {
+        while (*args == ' ') args++;
+        if (*args >= '0' && *args <= '9') core = *args - '0';
+    }
+
+    xtensa_cpu_t *cpu = (core >= 0) ? emu_flexe_get_cpu_n(core)
+                                    : emu_flexe_get_cpu();
+    if (!cpu) {
+        send_str(fd, "ERR no such core\n");
+        return;
+    }
     char line[256];
 
     snprintf(line, sizeof(line), "REG PC=0x%08X\n", cpu->pc);
@@ -498,9 +510,10 @@ static void handle_periph(int fd)
         xtensa_cpu_t *cpu = emu_flexe_get_cpu_n(core);
         if (!cpu || !cpu->pc) continue;
         snprintf(line, sizeof(line),
-                 "CPU%d pc=0x%08X ps=0x%08X intlvl=%u intenable=0x%08X interrupt=0x%08X halted=%d\n",
+                 "CPU%d pc=0x%08X ps=0x%08X intlvl=%u intenable=0x%08X interrupt=0x%08X halted=%d running=%d exc=%u excvaddr=0x%08X epc1=0x%08X\n",
                  core, cpu->pc, cpu->ps, cpu->ps & 0xF,
-                 cpu->intenable, cpu->interrupt, cpu->halted ? 1 : 0);
+                 cpu->intenable, cpu->interrupt, cpu->halted ? 1 : 0,
+                 cpu->running ? 1 : 0, cpu->exccause, cpu->excvaddr, cpu->epc[0]);
         send_str(fd, line);
         snprintf(line, sizeof(line),
                  "CPU%d ccount=0x%08X ccompare=[0x%08X 0x%08X 0x%08X] cycles=%llu\n",
@@ -644,6 +657,15 @@ void emu_control_poll(void)
         } else {
             send_str(client, "ERR usage: poke <addr> <val>\n");
         }
+    } else if (strcmp(buf, "tasks") == 0) {
+        if (!emu_flexe_active()) {
+            send_str(client, "ERR flexe not active\n");
+        } else {
+            static char tbuf[2048];
+            int tn = emu_flexe_dump_tasks(tbuf, (int)sizeof(tbuf));
+            if (tn > 0) send_str(client, tbuf);
+            send_str(client, "OK\n");
+        }
     } else if (strncmp(buf, "break ", 6) == 0) {
         handle_break(client, buf + 6);
     } else if (strncmp(buf, "clearbreak ", 11) == 0) {
@@ -656,8 +678,8 @@ void emu_control_poll(void)
         handle_continue(client);
     } else if (strncmp(buf, "step", 4) == 0 && (buf[4] == '\0' || buf[4] == ' ')) {
         handle_step(client, buf + 4);
-    } else if (strcmp(buf, "regs") == 0) {
-        handle_regs(client);
+    } else if (strncmp(buf, "regs", 4) == 0 && (buf[4] == '\0' || buf[4] == ' ')) {
+        handle_regs(client, buf + 4);
     } else if (strcmp(buf, "periph") == 0) {
         handle_periph(client);
     } else if (strncmp(buf, "memdump ", 8) == 0) {

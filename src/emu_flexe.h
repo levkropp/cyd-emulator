@@ -43,4 +43,7 @@ int  emu_flexe_debug_wait_paused(int timeout_ms); /* wait for pause, return 1 if
 /* Symbol table accessor (for HUD display) */
 const elf_symbols_t *emu_flexe_get_syms(void);
 
+/* Dump FreeRTOS task table into buf (debug) */
+int emu_flexe_dump_tasks(char *buf, int len);
+
 #endif /* EMU_FLEXE_H */

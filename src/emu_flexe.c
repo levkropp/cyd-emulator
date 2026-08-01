@@ -273,6 +273,14 @@ const elf_symbols_t *emu_flexe_get_syms(void)
     return flexe_active ? flexe_session_syms(session) : NULL;
 }
 
+int emu_flexe_dump_tasks(char *buf, int len)
+{
+    if (!flexe_active || !buf || len <= 0) return 0;
+    freertos_stubs_t *frt = flexe_session_frt(session);
+    if (!frt) return 0;
+    return freertos_stubs_dump_tasks(frt, buf, len);
+}
+
 void emu_flexe_debug_break(void)
 {
     debug_pause_requested = 1;
